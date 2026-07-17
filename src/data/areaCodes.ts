@@ -1,0 +1,106 @@
+// US Area Codes mapped to States
+// Sources: https://gist.github.com/rkorkosz/11f16ce6493abf950e67
+
+export const stateToAreaCodes: Record<string, number[]> = {
+  "Mississippi": [228, 601, 662, 769],
+  "Northern Mariana Islands": [670],
+  "Oklahoma": [405, 539, 580, 918],
+  "Delaware": [302],
+  "Minnesota": [218, 320, 507, 612, 651, 763, 952],
+  "Illinois": [217, 224, 309, 312, 331, 618, 630, 708, 773, 779, 815, 847, 872],
+  "Arkansas": [479, 501, 870],
+  "New Mexico": [505, 575],
+  "Indiana": [219, 260, 317, 574, 765, 812],
+  "Maryland": [240, 301, 410, 443, 667],
+  "Louisiana": [225, 318, 337, 504, 985],
+  "Idaho": [208],
+  "Wyoming": [307],
+  "Tennessee": [423, 615, 731, 865, 901, 931],
+  "Arizona": [480, 520, 602, 623, 928],
+  "Iowa": [319, 515, 563, 641, 712],
+  "Michigan": [231, 248, 269, 313, 517, 586, 616, 734, 810, 906, 947, 989],
+  "Kansas": [316, 620, 785, 913],
+  "Utah": [385, 435, 801],
+  "American Samoa": [684],
+  "Oregon": [458, 503, 541, 971],
+  "Connecticut": [203, 475, 860],
+  "Montana": [406],
+  "California": [209, 213, 310, 323, 408, 415, 424, 442, 510, 530, 559, 562, 619, 626, 650, 657, 669, 707, 714, 747, 760, 805, 818, 831, 858, 909, 916, 925, 949, 951],
+  "Massachusetts": [339, 351, 413, 508, 617, 774, 781, 857, 978],
+  "Puerto Rico": [787, 939],
+  "South Carolina": [803, 843, 864],
+  "New Hampshire": [603],
+  "Wisconsin": [262, 414, 534, 608, 715, 920],
+  "Vermont": [802],
+  "Georgia": [229, 404, 470, 678, 706, 762, 770, 912],
+  "North Dakota": [701],
+  "Pennsylvania": [215, 267, 272, 412, 484, 570, 610, 717, 724, 814, 878],
+  "West Virginia": [304, 681],
+  "Florida": [239, 305, 321, 352, 386, 407, 561, 727, 754, 772, 786, 813, 850, 863, 904, 941, 954],
+  "Hawaii": [808],
+  "Kentucky": [270, 502, 606, 859],
+  "Alaska": [907],
+  "Nebraska": [308, 402, 531],
+  "Missouri": [314, 417, 573, 636, 660, 816],
+  "Ohio": [216, 234, 330, 419, 440, 513, 567, 614, 740, 937],
+  "Alabama": [205, 251, 334, 938],
+  "Rhode Island": [401],
+  "Washington, DC": [202],
+  "Virgin Islands": [340],
+  "South Dakota": [605],
+  "Colorado": [303, 719, 720, 970],
+  "New Jersey": [201, 551, 609, 732, 848, 856, 862, 908, 973],
+  "Virginia": [276, 434, 540, 571, 703, 757, 804],
+  "Guam": [671],
+  "Washington": [206, 253, 360, 425, 509],
+  "North Carolina": [252, 336, 704, 828, 910, 919, 980, 984],
+  "New York": [212, 315, 347, 516, 518, 585, 607, 631, 646, 716, 718, 845, 914, 917, 929],
+  "Texas": [210, 214, 254, 325, 346, 361, 409, 430, 432, 469, 512, 682, 713, 737, 806, 817, 830, 832, 903, 915, 936, 940, 956, 972, 979],
+  "Nevada": [702, 725, 775],
+  "Maine": [207]
+};
+
+// Auto-build reverse mapping
+export const areaCodeToState: Record<string, string> = {};
+
+for (const [state, codes] of Object.entries(stateToAreaCodes)) {
+  for (const code of codes) {
+    areaCodeToState[code.toString()] = state;
+  }
+}
+
+/**
+ * Extracts a US area code from a phone number string and maps it to a US state.
+ */
+export function getStateByPhone(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  
+  // Remove all non-digit characters
+  const digits = phone.replace(/\D/g, "");
+  
+  // US local numbers have 10 digits or 11 digits starting with '1'
+  let normalized = digits;
+  if (digits.length === 11 && digits.startsWith("1")) {
+    normalized = digits.substring(1);
+  }
+  
+  if (normalized.length >= 10) {
+    // The area code is the first 3 digits of a 10-digit sequence
+    const areaCode = normalized.substring(0, 3);
+    if (areaCodeToState[areaCode]) {
+      return areaCodeToState[areaCode];
+    }
+  }
+  
+  // Fallback: search for any 3-digit sequence in the phone number that matches a valid area code
+  const matches = phone.match(/\b([2-9]\d{2})\b/g);
+  if (matches) {
+    for (const match of matches) {
+      if (areaCodeToState[match]) {
+        return areaCodeToState[match];
+      }
+    }
+  }
+  
+  return null;
+}

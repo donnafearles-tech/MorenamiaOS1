@@ -1,0 +1,91 @@
+{
+  "version": "1.2",
+  "description": "Reglas base, saludos, etiqueta telefónica y principios de atención al cliente para Morena Mia.",
+  "topics": [
+    {
+      "id": "greeting_and_etiquette",
+      "name": "Greeting and Basic Etiquette",
+      "content": {
+        "incoming_call": "Thank you for calling [Company]; this is [Name]. How can I assist you?",
+        "follow_up_call": "Hello, this is the Morena Mia Beauty Group CS department. We are trying to reach [Customer Name] regarding a purchase on [Date] at [Store]. We'd like to hear about your experience and if you have any questions. Please call us back at 888-249-4189, 8am-5pm CT, Monday-Friday.",
+        "voicemail_follow_up": "Hello, this is Morena Mia Beauty Group Customer Service. We are trying to reach [Customer Name] regarding a recent purchase at [City]. Please call us back at 888-249-4189, 8am-5pm ET, Monday-Friday. Thank you.",
+        "telephone_skills": {
+          "call_structure": [
+            "Opening: greeting, identification, purpose, and check for availability.",
+            "Gathering: open‑ended questions, active listening, note‑taking.",
+            "Proposing: offer options, explain benefits, handle objections.",
+            "Closing: summarise agreements, confirm actions, thank and say goodbye."
+          ],
+          "listening_techniques": [
+            "Use active silence (give the customer time to think).",
+            "Paraphrase to confirm understanding.",
+            "Ask open‑ended questions (what, how, why).",
+            "Avoid interrupting; wait for natural pauses."
+          ],
+          "handling_complaints": [
+            "Never take the complaint personally.",
+            "Write while the customer speaks (shows interest).",
+            "Repeat what you understood to align expectations.",
+            "Offer concrete solutions and clear timelines.",
+            "Follow C.A.S.H.: Clarify, Agree on amount/action, Solicit commitment, Handle objections."
+          ],
+          "voice_and_tone": "Smile while speaking, modulate volume and speed, avoid monotony, pronounce clearly, use pauses for emphasis."
+        }
+      }
+    },
+    {
+      "id": "customer_service_principles",
+      "name": "Core Customer Service Principles",
+      "content": {
+        "moments_of_truth": "Every interaction is an opportunity to form a positive or negative impression.",
+        "quality_dimensions": [
+          "Reliability: Consistently fulfill promises.",
+          "Responsiveness: Act promptly and anticipate needs.",
+          "Feeling Valued: Make the customer feel important.",
+          "Empathy: Understand the customer's feelings and perspective.",
+          "Competence: Demonstrate knowledge and skill.",
+          "Personalized Attention: Have one person take ownership."
+        ],
+        "service_recovery": {
+          "steps": [
+            "Thank the customer for reporting the issue.",
+            "Take responsibility (no excuses).",
+            "Resolve quickly, involving the customer.",
+            "Do something extra.",
+            "Apologize at the end (not at the beginning) and follow up."
+          ]
+        },
+        "handling_difficult_customers": [
+          "Stay calm (deep breathing, positive self‑talk).",
+          "Let the customer vent without interruption.",
+          "Acknowledge their emotions (empathy).",
+          "Avoid trigger words ('policy', 'no', 'but').",
+          "Move to logical problem‑solving once emotions subside.",
+          "If needed, delay action or consult a superior."
+        ]
+      }
+    },
+    {
+      "id": "store_policies",
+      "name": "Store Policies & Basic Rules",
+      "content": {
+        "no_refunds_no_returns": "Policy is signed upon purchase. Cosmetics cannot be returned for health and safety reasons.",
+        "lifetime_warranty": "Devices have a lifetime warranty (replacement only, not refund).",
+        "promotional_prices": "Must be honored.",
+        "agent_golden_rules": [
+          "Daily follow‑up: call + email.",
+          "Never close a case without customer confirmation.",
+          "FedEx signature alone is NOT sufficient.",
+          "Always include FedEx tracking link in ClickUp comments.",
+          "Cases without response after deadline → close as LOST LEAD.",
+          "Do not leave the resolution field empty.",
+          "Billing address is required for refunds (tax compliance).",
+          "For refunds, verify no active dispute first.",
+          "If product is defective or missing, replacement is always authorized (under $500 does not need escalation).",
+          "For GBK offers, prefer products over devices.",
+          "For Shalem, use exact format for payment link requests."
+        ]
+      }
+    }
+  ]
+}

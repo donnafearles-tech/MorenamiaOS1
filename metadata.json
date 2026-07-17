@@ -1,0 +1,6 @@
+{
+  "name": "Morena OS",
+  "description": "Donna AI-powered CRM, support manager, and Zendesk/ClickUp integration hub.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

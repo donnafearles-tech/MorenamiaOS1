@@ -1,0 +1,70 @@
+{
+  "field_id": "ee1a1e07-a9b6-4209-a7bc-87162005e2f2",
+  "field_name": "Reason",
+  "options": [
+    {
+      "name": "Shippings",
+      "id": "fa6512ce-a88e-4c94-ba01-a114c05444e4"
+    },
+    {
+      "name": "No Results",
+      "id": "e0ad09bc-4646-43ff-b7de-630eedc90024"
+    },
+    {
+      "name": "Reaction",
+      "id": "350f5c9b-3935-4868-b0c5-17c07c2cd508"
+    },
+    {
+      "name": "First Sale Refund",
+      "id": "4cce58ae-620c-488c-9d6d-3d866ef5a363"
+    },
+    {
+      "name": "Missing product",
+      "id": "b90d657a-f315-4fa4-b570-4aa35941bfc1"
+    },
+    {
+      "name": "Sales person misinformed",
+      "id": "ff1356b9-ca85-4505-8b95-00fd35b4d239"
+    },
+    {
+      "name": "Regret",
+      "id": "64ce361e-f014-4103-96ed-c373b330680a"
+    },
+    {
+      "name": "Unkowns",
+      "id": "0eab1c14-a0de-49a6-b0be-ebc45e6abc1e"
+    },
+    {
+      "name": "deffective",
+      "id": "1da2df32-4113-4002-a0d7-40b571025ea0"
+    },
+    {
+      "name": "Charge",
+      "id": "b0da2e25-7b71-4e41-8aef-e0c59a262235"
+    },
+    {
+      "name": "Wrong product",
+      "id": "a8964e72-36eb-4331-be02-33c898df29d5"
+    },
+    {
+      "name": "TAXES",
+      "id": "934206c9-8241-4c17-9c2f-b4737b74634f"
+    },
+    {
+      "name": "Amount not agreed",
+      "id": "cab3c885-c260-48a2-9575-27529e601133"
+    },
+    {
+      "name": "GBK",
+      "id": "69953f67-c3b9-407a-a143-00aa2273133f"
+    },
+    {
+      "name": "Instructions",
+      "id": "d03ff44c-ae1c-4526-aaf9-75998f70975a"
+    },
+    {
+      "name": "Shalem",
+      "id": "2add531d-a523-4988-85c4-fd0c42ecf9b0"
+    }
+  ]
+}

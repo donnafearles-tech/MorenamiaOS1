@@ -1,0 +1,35 @@
+{
+  "version": "1.2",
+  "description": "Reglas para productos defectuosos y faltantes/incorrectos en Morena Mia. Incluye procedimientos de reemplazo, evidencia en video, y manejo de devoluciones.",
+  "topics": [
+    {
+      "id": "defective_product",
+      "name": "Defective Device / Product Procedure",
+      "content": {
+        "steps": [
+          "Request a short video (30 seconds to 1 minute) showing and explaining the malfunction.",
+          "Escalate to technical team for verification.",
+          "Check stock availability. If the model is discontinued, offer the nearest equivalent alternative (e.g., Marvelous Signature Pro for Gold, Gorilla Device for Jelessi).",
+          "If a return is required, generate a Return Label (RL). The replacement is sent when the defective item arrives at the warehouse (or earlier for priority cases).",
+          "Ship overnight. Always attach the FedEx tracking link in the ClickUp comment."
+        ],
+        "customer_guidelines": "Check items against receipt, take clear photos/videos of packaging and products, notify immediately via email or WhatsApp.",
+        "warehouse_notes": "Defective returns take ~14 days for processing before new shipment. For urgent cases, replacement can be initiated once the customer drops off the package at FedEx. Compensations are recorded in 'Master Shippings'."
+      }
+    },
+    {
+      "id": "missing_wrong_product",
+      "name": "Missing or Wrong Product Procedure",
+      "content": {
+        "steps": [
+          "Verify if the product was listed on the invoice and if it was supposed to be shipped (or given in store).",
+          "Check Master Shipping to confirm if it was actually sent.",
+          "Request photo evidence of all received products.",
+          "Compare photos with the invoice.",
+          "If confirmed missing/wrong, ship replacement overnight and attach FedEx tracking in ClickUp."
+        ],
+        "reason_codes": "Use 'Missing Products' or 'Wrong Product' as the reason for compensation."
+      }
+    }
+  ]
+}

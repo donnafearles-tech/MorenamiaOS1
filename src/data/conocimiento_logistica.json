@@ -1,0 +1,50 @@
+{
+  "version": "1.2",
+  "description": "Reglas de envíos, seguimiento diario, deadlines y tracking para Morena Mia. Incluye formatos de solicitud de envío y etiqueta de retorno.",
+  "topics": [
+    {
+      "id": "shipping_and_tracking",
+      "name": "Shipping, Return Labels & Tracking",
+      "content": {
+        "request_formats": {
+          "shipping_request": "Invoice - Full Name\nAddress:\nPh:\nEmail:\nProduct:\nReason for shipment\n*Overnight. (Add *Previous shipping if already sent before.)",
+          "return_label_request": "Invoice + customer name\nAddress:\nPhone:\nEmail:\nDevice name to be replaced:\nSpecify 'Return Label (RL)'\nReason of shipping (e.g., defective)\n*Overnight"
+        },
+        "tracking": "Always include FedEx tracking link in the ClickUp comment when a shipment is created.",
+        "tools": {
+          "Master Shipping": "Used to check shipping history and tracking.",
+          "ClickUp": "Task management for follow‑up and tracking.",
+          "Zendesk": "Ticket management and macros for deadlines."
+        }
+      }
+    },
+    {
+      "id": "followup_deadlines",
+      "name": "Daily Follow‑up & Deadlines",
+      "content": {
+        "daily_follow_up": {
+          "actions": ["Phone call", "Email"],
+          "frequency": "Every calendar day (Monday–Friday, unless otherwise directed)",
+          "update_clickup": "After completing both actions, change Due Date to TOMORROW. Failure to do so will cause the task to disappear from the next day's pending list and will be flagged as an error."
+        },
+        "statuses": {
+          "CS_REPLY": "Waiting for customer response.",
+          "INTERNAL_WAITING": "Waiting for internal department (shipping, compensation, accounting)."
+        },
+        "deadline_and_closure": {
+          "deadline_trigger": "After 4 days of no customer response",
+          "deadline_action": "Send deadline macro (Zendesk).",
+          "lost_lead": {
+            "resolution": "LOST LEAD",
+            "example_comment": "Closed as LOST LEAD. Deadline sent on [date]. Customer did not respond after [X] previous contact attempts. If customer re‑engages, ticket will be reopened."
+          }
+        },
+        "closure_rules": {
+          "customer_confirmation": "Never close a case until the customer explicitly confirms receipt (by email or phone) of product, instructions, or refund. FedEx signature alone is NOT sufficient.",
+          "documentation": "All confirmations must be recorded as a comment in ClickUp BEFORE closing.",
+          "resolution_field": "Never leave the resolution field empty. For no‑response cases, use 'LOST LEAD'."
+        }
+      }
+    }
+  ]
+}

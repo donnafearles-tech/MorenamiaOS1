@@ -1,0 +1,276 @@
+{
+  "version": "1.0",
+  "description": "Integrated knowledge base for Morena Mia Customer Service (without speeches)",
+  "procedimientos": [
+    {
+      "tema": "Política de Reembolsos (Menos de $500 USD)",
+      "instruccion": "Si el cliente rechaza las compensaciones o productos alternativos y su compra original fue menor a $500 (ej. $290 de un A.Tox), el reembolso está automáticamente aprobado. Procede a explicar el método de reembolso según su país (Wire para Canadá, Cheque para USA) sin necesidad de escalar a Karla."
+    },
+    {
+      "tema": "Producto Defectuoso (ATox, Crema, etc.)",
+      "instruccion": "Si el cliente reporta un producto defectuoso, ofrecer un reemplazo inmediato. No es necesario pedir autorización para esto, independientemente del monto, ya que siempre está autorizado. Enviar un correo y dejar un voicemail para confirmar la dirección de envío."
+    },
+    {
+      "tema": "Reemplazo de Dispositivos (Sin Stock o Descontinuados)",
+      "instruccion": "Verificar stock antes de prometer un reemplazo. Si un dispositivo como el 'Marvelous Gold' o 'Jelessi' está fuera de stock, ofrecer la alternativa más cercana (ej. 'Marvelous Signature Pro' o 'Gorilla Device'). Nunca ofrecer un dispositivo sin antes confirmar la disponibilidad."
+    },
+    {
+      "tema": "Compensaciones por Give Back (GBK) Rechazado",
+      "instruccion": "Si al cliente se le rechazó el beneficio del GBK, ofrecer un regalo de compensación. Basarse en el 'spare' del cliente para elegir productos de la lista SPARE MMG. Siempre ofrecer cremas o sueros, NO dispositivos, a menos que sea una situación extremadamente grave."
+    },
+    {
+      "tema": "Seguimiento Diario en ClickUp",
+      "instruccion": "Cada día se debe llamar al cliente y enviar un correo. Inmediatamente después de hacerlo, se debe cambiar la fecha de vencimiento ('Due Date') de la tarea en ClickUp a MAÑANA. Si no se hace, la tarea se pierde en la lista y Karla lo considera un error."
+    },
+    {
+      "tema": "Cierre de Caso por Falta de Respuesta (LOST LEAD)",
+      "instruccion": "Si un cliente no responde acumulando 4 días calendario o más (5, 6, 7, 8, etc.) de seguimiento, se debe enviar un correo de 'Deadline'. EXCEPCIÓN CRÍTICA: Si ya existen vestigios semánticos o gramaticales en el historial de que se envió un 'Deadline' previamente, o si el estatus actual de la tarea ya es 'deadline', NO se debe enviar otro. En su lugar, se debe proceder inmediatamente con un Close Ticket bajo la resolución 'LOST LEAD'. NUNCA se debe cerrar un caso sin una resolución asignada."
+    },
+    {
+      "tema": "Confirmación para Cerrar un Caso",
+      "instruccion": "Un caso de Customer Service no se cierra con la firma de FedEx. Se debe esperar a que el cliente confirme explícitamente (por correo o llamada) que recibió el producto, las instrucciones o el reembolso. Esa confirmación debe quedar documentada en ClickUp."
+    },
+    {
+      "tema": "Verificación de Dirección y Prevención de Fraudes (AVS)",
+      "instruccion": "Al procesar reembolsos, verificar que la dirección de facturación (billing address) coincida con la identificación del cliente. Esto es para cumplir con leyes fiscales mexicanas, prevenir fraudes con tarjetas de crédito y calcular impuestos correctamente."
+    },
+    {
+      "tema": "Proceso de Reembolso por Wire Transfer o e-Transfer",
+      "instruccion": "Antes de iniciar un reembolso, el cliente debe confirmar por escrito que no ha presentado ni presentará una disputa con su banco. Si ya abrió una disputa, el proceso de reembolso se detiene hasta que la cancele. Para Wire se necesita un DocuSign con datos bancarios."
+    },
+    {
+      "tema": "Solicitud de Link de Pago (Plan Shalem)",
+      "instruccion": "Para solicitar un link de pago para un cliente Shalem, se deben pedir los datos en este formato exacto: 'Nombre : [nombre]\\nDireccion: [dirección]\\nCorreo electronico: [email]\\nNumero de telefono: [teléfono]'. Esto se envía al grupo de compensaciones."
+    }
+  ],
+  "refund_process": {
+    "task_creation": {
+      "pre_verification": "Revisar información de DocuSign: que el ID adjunto sea del tarjetahabiente. Para cheque: verificar dirección completa y válida. Para Wire Transfer: la dirección debe ser billing address del cliente (no la del banco), verificar que el banco pueda recibir WT internacional sin intermediario. Si se provee banco intermediario, incluir toda la info. Verificar SWIFT CODE en sitio oficial del banco.",
+      "duplicate_task": "Duplicar la tarea y renombrar como 'INVOICE + CHECK / WIRE TRANSFER + FULL/PARTIAL REFUND'. Abrir la tarea duplicada en la sección 'REFUND'. Agregar fecha de vencimiento y asignar a Lorenzo.",
+      "fields_check": {
+        "name": "Nombre del cliente",
+        "email": "Correo",
+        "ph": "Teléfono",
+        "address": "Dirección",
+        "amount": "$ USD"
+      },
+      "fields_wire": {
+        "customer_name": "Nombre del cliente",
+        "bank_name": "Nombre del banco",
+        "bank_account": "Número de cuenta",
+        "address": "Dirección (billing address)",
+        "ph": "Teléfono",
+        "swift_code": "SWIFT code",
+        "amount": "$ USD",
+        "intermediary_bank_info": "Incluir si se proporciona"
+      },
+      "final_check": "Verificar nuevamente toda la información: monto, nombre, cuenta, dirección, que todos los campos estén completos."
+    },
+    "refund_methods": {
+      "wire_transfer": {
+        "aplica_para": "Principalmente Canadá y otros países fuera de USA sin e-transfer",
+        "datos_necesarios": "Nombre del tarjetahabiente, dirección, SWIFT, ABA/routing, número de cuenta",
+        "documento": "DocuSign (solicitar a compensaciones)",
+        "verificacion": "Nombre en DocuSign debe coincidir con tarjetahabiente original. Dirección debe coincidir con billing address."
+      },
+      "e_transfer": {
+        "aplica_para": "Clientes con banca en línea que acepta Interac (Canadá)",
+        "datos_necesarios": "Solo el email vinculado a la cuenta bancaria",
+        "confirmacion_requerida": "El cliente debe confirmar por escrito: 1) No ha presentado ni presentará una disputa. 2) Acepta el refund como resolución final."
+      },
+      "check": {
+        "aplica_para": "Estados Unidos",
+        "procedimiento": "Se envía cheque físico. Tomar foto y enviar al cliente. Seguimiento hasta confirmación de recepción."
+      }
+    },
+    "dispute_policy": {
+      "definicion_para_cliente": "Una disputa (chargeback) ocurre cuando el titular de la tarjeta pide a su banco que revierta un pago. El banco retira los fondos temporalmente e inicia una investigación.",
+      "comunicacion_ejemplo": "Please do not initiate a dispute (chargeback) with your bank. A dispute freezes the funds and delays your refund. If you have already contacted your bank, please let us know so we can guide you."
+    },
+    "billpocket_santander": {
+      "condiciones": "Válido para ventas de hasta 30 días (Billpocket) o hasta 3 meses (Santander).",
+      "requisito": "Confirmación escrita del cliente: 1) No ha presentado ni presentará chargeback. 2) Acepta reembolso al mismo método de pago original."
+    }
+  },
+  "defective_product_protocol": {
+    "pasos": [
+      "Solicitar al cliente un video breve (30 segundos a 1 minute) mostrando y explicando el mal funcionamiento del aparato.",
+      "Escalar al departamento técnico para verificar la falla.",
+      "Si el modelo original está descontinuado, enviar una versión más moderna y actualizada sin costo adicional (ej. Ultimate Infra-red LED Face and Body).",
+      "Generar una etiqueta de envío FedEx para que el cliente devuelva el equipo dañado."
+    ],
+    "lineamientos_cliente": "Verificar artículos contra recibo, tomar fotos/videos claros del empaque y productos, notificar inmediatamente vía email o WhatsApp.",
+    "notas_almacen": "Los productos defectuosos tienen ciclo de ~14 días para procesamiento antes de nuevo envío. En casos prioritarios se puede gestionar reemplazo al detectar que el cliente entregó paquete en FedEx. Las compensaciones se registran en 'Master Shippings'."
+  },
+  "missing_products_guide": {
+    "pasos": [
+      "Verificar el recibo de compra o confirmación de pedido contra los artículos recibidos.",
+      "Tomar fotos o videos claros de los productos recibidos resaltando los faltantes o incorrectos.",
+      "Contactar a customer service por email, teléfono o WhatsApp proporcionando número de pedido, descripción y evidencia.",
+      "El equipo investigará y podrá enviar reemplazos o etiqueta de devolución."
+    ]
+  },
+  "general_instructions": {
+    "flujo_general": {
+      "paso_1": "RECEPCIÓN DEL CASO: Recibir nombre, teléfono, correo y motivo.",
+      "paso_2": "IDENTIFICAR CLIENTE: Buscar invoice en ShareFile, Nova o Master Shipping. Si no aparece, pedir foto del ticket o últimos 4 dígitos de tarjeta.",
+      "paso_3": "CREAR TAREA EN CLICKUP: Título en MAYÚSCULAS. Incluir invoice, motivo y comentario inicial. Abrir ticket en Zendesk.",
+      "paso_4": "DIAGNOSTICAR TIPO DE CASO: Clasificar (Defective, Missing Products, GBK, Shalem, Instructions, Refund, Shipping, Regret, Reaction, Restock).",
+      "paso_5": "PRIMER CONTACTO: Llamar (dejar voicemail si es necesario) y enviar correo de presentación."
+    },
+    "seguimiento": {
+      "diario": {
+        "acciones": ["Llamada telefónica", "Correo electrónico"],
+        "frecuencia": "Diaria (excepto fines de semana, según chat)",
+        "actualizacion_clickup": "Después de llamada+correo, cambiar Due Date a MAÑANA. Si no se actualiza, la tarea no aparecerá en la lista de pendientes del día siguiente y Karla lo marcará como error."
+      },
+      "estados": {
+        "CS_REPLY": "Esperando respuesta del cliente.",
+        "INTERNAL_WAITING": "Esperando acción de un departamento interno (shipping, compensaciones, contador)."
+      },
+      "deadline": {
+        "cuando_aplica": "REGLA INAMOVIBLE: Estrictamente al cumplirse 4 días calendario o más (5, 6, 7, 8, etc.) sin respuesta del cliente.",
+        "accion_principal": "Enviar mensaje de deadline (macro en Zendesk) SOLO si no se ha enviado uno antes.",
+        "excepcion_cierre_directo": "Si al revisar los comentarios ya existen vestigios de que se envió un deadline previo, o el estatus ya es 'deadline', se omite la acción principal y se ejecuta inmediatamente el cierre_por_falta_respuesta.",
+        "cierre_por_falta_respuesta": {
+          "resolucion": "LOST LEAD",
+          "comentario_ejemplo": "Se cierra como LOST LEAD. Se envió deadline el [fecha] y el cliente no respondió. Se realizaron [X] intentos de contacto previos. Si vuelve a contactar, se reabrirá."
+        }
+      }
+    },
+    "resoluciones": {
+      "DEFECTIVE_DEVICE": {
+        "procedimiento": "Solicitar video/foto del defecto. Verificar stock. Si el modelo está descontinuado, ofrecer alternativa. Solicitar Return Label (RL) si aplica.",
+        "envio": "Overnight. Adjuntar link de FedEx en comentario de ClickUp."
+      },
+      "MISSING_PRODUCTS": {
+        "procedimiento": "Verificar en Master Shipping si realmente no se enviaron. Si el cliente insiste, pedir foto de todos los productos recibidos. Comparar con invoice.",
+        "envio": "Overnight. Adjuntar link de FedEx en comentario de ClickUp."
+      },
+      "GBK_TAXES": {
+        "procedimiento": "Verificar si aplicó el beneficio. Si fue rechazado, explicar causa (documentación faltante, tarjeta no válida, etc.).",
+        "compensacion": "Ofrecer productos del catálogo SPARE MMG basado en el monto del spare. Si la situación no es grave, NO ofrecer dispositivos, solo cremas/sueros.",
+        "razon_compensacion": "Usar 'Instructions' u otro motivo real, no solo 'Gift'."
+      },
+      "SHALEM": {
+        "procedimiento": "Verificar pagos pendientes. Si el cliente perdió la tarjeta, ofrecer link de pago o wire transfer para el total (con descuento de finance fee si paga completo).",
+        "solicitud_link_pago": {
+          "formato": "Nombre : [nombre completo]\\nDireccion: [dirección completa]\\nCorreo electronico: [correo electrónico]\\nNumero de telefono: [número de teléfono]"
+        }
+      },
+      "INSTRUCTIONS": {
+        "procedimiento": "Enviar instrucciones (macro). Hacer follow-up hasta que el cliente confirme de recibido. Cuenta como punto de bono si se completa."
+      },
+      "REFUND": {
+        "condiciones": "Si el cliente rechaza la compensación y el monto es < $500USD, el refund está automáticamente aprobado. Si es mayor, escalar.",
+        "umbral_autorizacion": 500
+      },
+      "SHIPPING": {
+        "nota": "Según Karla (13/04), estos casos ya no requieren seguimiento del agente. Verificar si la política sigue vigente.",
+        "accion": "Informar al cliente que FedEx requiere información adicional o que el paquete está en la sucursal."
+      }
+    },
+    "normas_clickup": {
+      "cierre_tarea": "Solo cuando el cliente confirma explícitamente recepción del producto, instrucciones o refund. La firma de FedEx NO es suficiente para customer service.",
+      "resolucion_perdida": "Si el cliente deja de responder, cerrar como 'LOST LEAD'. Nunca dejar el campo de resolución vacío.",
+      "link_fedex": "Siempre que se genere un envío, pegar el link de rastreo de FedEx en un comentario de la tarea de ClickUp.",
+      "titulo_tarea": "Siempre en MAYÚSCULAS.",
+      "documentacion_confirmacion": "Cualquier confirmación del cliente (correo, llamada) debe quedar registrada como comentario en ClickUp ANTES de cerrar."
+    },
+    "normas_zendesk": {
+      "merge_tickets": "Unificar tickets del mismo cliente para centralizar la comunicación.",
+      "macro_deadline": "Usar plantilla de deadline con formato: #INVOICE* CIUDAD_TIENDA* - SMS DEADLINE."
+    },
+    "verificacion_direccion_fiscal": {
+      "razones": [
+        "Cumplir con leyes fiscales mexicanas (SAT): Verificar Régimen Fiscal del cliente.",
+        "Prevenir fraudes (AVS): Confirmar que el titular de la tarjeta es legítimo.",
+        "Calcular impuestos correctamente: Aplicar IVA según ubicación."
+      ],
+      "cuando_pedir": "Al no encontrar al cliente en el sistema o antes de procesar un refund."
+    },
+    "regla_banco_con_plazo": {
+      "descripcion": "Si el cliente informa que su banco le ha dado un plazo exacto (X días) para resolver una disputa o transferencia, NO hacer seguimiento diario. Programar un único contacto en X días.",
+      "parametro_X": "Número de días que el banco indicó al cliente.",
+      "estado_tarea": "Internal Waiting con fecha de seguimiento = hoy + X días."
+    }
+  },
+  "spare_options": {
+    "compensations_guide": {
+      "daily_products": [
+        "Multi-Vitamin Recovery 24H Moisturizer",
+        "24K Gold Facial Peel System",
+        "Hyaluronic Acid Eye Serum",
+        "Hyaluronic Acid Eye Cream",
+        "AHA Cleansing and Exfoliating Foam",
+        "Vitamin B5 Hydrafresh Moisturizing Toner",
+        "Turmeric Mousse Facial Cleanser",
+        "Ultimate Dermatox Red Caviar Mask",
+        "Ultimate Dermatox Red Caviar Serum",
+        "Face & Body Silk Cream - Nano Technology",
+        "Lenio - X Gel",
+        "Energizing Passion Fruit Body Butter",
+        "Vitamin C Concentrated Serum"
+      ],
+      "extra_sets": [
+        "Collagen Renewal Set",
+        "A.TOX Eye treatment",
+        "Ultimate Dermatox Red Caviar Set Collection",
+        "Neck and Décolleté Collection (Serum, Cream & Gold Neck Decollate Lifting Treatment Mask Set)",
+        "D'OR24K MED SPA FOREVER YOUNG SERUM COLLECTION",
+        "Dermatox Collection with 18-in-1 Red Caviar Anti-Aging Face & Eye Mask Set",
+        "24K Gold Brightening & Moisturizing Facial Mask",
+        "Black Truffle Perfection Collection with Velvet Travel Case",
+        "Vitamin C Collection 3-Step Brightening System"
+      ],
+      "devices": [
+        "Empire LED Eye Device",
+        "Empire Derma Neck Lift LED Device",
+        "Marvelous Signature",
+        "3D RF Ultrasound Face and Body Slimming",
+        "RELAXATIO",
+        "GENESIS Z",
+        "GENESIS PRIME",
+        "Marvelous 24K Gold Pro Skincare Revolution System",
+        "Submarine MAX PRO+ (Green + Red light)"
+      ],
+      "full_sets": [
+        "Collagen Collection with Collagen Renewal Face & Eye Mask Set",
+        "24K Gold Brightening & Moisturizing Facial Mask",
+        "Dermatox Collection with 18-in-1 Red Caviar Anti-Aging Face & Eye Mask Set",
+        "Neck and Décolleté Collection Serum, Cream & Gold Neck Decollate Lifting Treatment Mask Set"
+      ],
+      "gifts_per_concern": {
+        "anti_aging_wrinkles": {
+          "daily": ["Hyaluronic Acid Eye Serum", "Hyaluronic Acid Eye Cream", "Vitamin C Concentrated Serum"],
+          "extra_sets": ["Collagen Renewal Set", "A.TOX Eye treatment", "Neck and Décolleté Collection", "Dermatox Collection", "24K Gold Brightening & Moisturizing Facial Mask", "Black Truffle Perfection Collection", "D'OR24K MED SPA FOREVER YOUNG SERUM COLLECTION"],
+          "devices": ["Genesis Z", "Marvelous Signature"]
+        },
+        "acne": {
+          "daily": ["Turmeric Mousse Facial Cleanser", "Ultimate Dermatox Red Caviar Cream", "Vitamin B5 Hydrafresh Moisturizing Toner", "Ultimate Dermatox Red Caviar Serum"],
+          "devices": ["Marvelous 24K Gold Pro Skincare Revolution System (Blue light)"],
+          "extra_sets": ["Dermatox Collection with 18-in-1 Red Caviar Anti-Aging Face & Eye Mask Set"]
+        },
+        "weightloss_slimming": {
+          "devices": ["3D RF Ultrasound Face and Body Slimming", "GENESIS PRIME"]
+        },
+        "pain_relief": {
+          "devices": ["MARVELOUS 24K GOLD PRO Skincare Revolution System", "Empire Derma Neck Lift LED Device", "Marvelous Signature", "Lenio - X Gel", "RELAXATIO", "GENESIS Z"]
+        },
+        "dark_spots": {
+          "extra_sets": ["Vitamin C Collection 3-Step Brightening System", "D'OR24K MED SPA FOREVER YOUNG SERUM COLLECTION"],
+          "daily": ["Vitamin C Concentrated Serum"],
+          "devices": ["Marvelous Signature (Green + Red light)"],
+          "extra_sets_2": ["24K Gold Brightening & Moisturizing Facial Mask"]
+        }
+      },
+      "bundle_examples": {
+        "DOR24K_COLLAGEN_SET": "1 Extra SET Collagen Renewal Set",
+        "DOR24K_STEMTOX_BUNDLE": "2 Daily + Extra Atox (A.TOX Eye treatment, Hyaluronic Acid Eye Serum, Hyaluronic Acid Eye Cream)",
+        "DOR24K_BUNDLE": "4 Daily (AHA Cleansing Foam, Multi-Vitamin Recovery, 24K Gold Facial Peel, Vitamin B5 Toner)",
+        "DERMATOX_SET": "1 Extra SET Ultimate Dermatox Red Caviar Set Collection",
+        "ZERO_GRAVITY_DOR24K_BUNDLE": "3 Daily (Lenio - X Gel, Energizing Passion Fruit Body Butter, AHA Cleansing Foam)"
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "procedimientos_prioritarios": [
+    {
+      "tema": "Corrección del asunto (subject) del ticket en Zendesk",
+      "instruccion": "Es VITAL y PRIORITARIO corregir el asunto (subject) del ticket en Zendesk. Debe seguir la nomenclatura correcta en MAYÚSCULAS y reflejar con precisión el tipo de caso y el invoice. Un asunto incorrecto dificulta el rastreo del caso y genera confusión en el equipo.",
+      "prioridad": "MÁXIMA"
+    },
+    {
+      "tema": "Política de no cancelación de envíos",
+      "instruccion": "Cuando un cliente solicita cancelar un envío, se le debe informar que los términos y condiciones están establecidos en el formulario de envío (shipping form), por lo que el paquete fue enviado bajo su acuerdo. Según el protocolo y las políticas de la empresa, NO podemos cancelar el envío una vez que ha sido procesado. Esta información debe comunicarse al cliente de manera clara y profesional, y debe quedar documentada en ClickUp y Zendesk.",
+      "prioridad": "MÁXIMA"
+    },
+    {
+      "tema": "Ofrecimiento de compensación desde el primer contacto",
+      "instruccion": "Es PRIORITARIO intentar enviar una oferta de compensación desde el primer contacto con el cliente. No se debe esperar a que el cliente exija una solución; el agente debe tomar la iniciativa de ofrecer un producto de compensación, un descuento o una alternativa adecuada al tipo de caso (reemplazo, producto complementario, gift por GBK, etc.). Esto ayuda a resolver el caso más rápidamente y mejora la satisfacción del cliente.",
+      "prioridad": "ALTA"
+    }
+  ]
+}

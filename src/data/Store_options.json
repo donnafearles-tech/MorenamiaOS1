@@ -1,0 +1,510 @@
+{
+  "field_id": "eea12258-757a-4cf0-b7cc-d67839c9d369",
+  "field_name": "Store / Location / Class",
+  "options": [
+    {
+      "name": "Empire SSA4",
+      "id": "cc7816de-813e-47b2-96e9-19f9b070d1ec"
+    },
+    {
+      "name": "SSA2 Earth",
+      "id": "fcd07a38-8d90-44af-89f6-ed63edcc7a98"
+    },
+    {
+      "name": "Lavelier PL",
+      "id": "94adb44b-15ed-4abb-929e-e0e6b79036cb"
+    },
+    {
+      "name": "Empire Tech PL",
+      "id": "93f1887a-8459-476c-be80-809d71487016"
+    },
+    {
+      "name": "SSA Hermetise",
+      "id": "b866f7bc-c451-436e-a224-fffa75d1cff6"
+    },
+    {
+      "name": "Oro Gold Melgar",
+      "id": "e28f6aab-34e0-470c-a863-dc23e24a3700"
+    },
+    {
+      "name": "Earth Airport Cozumel",
+      "id": "8b1f7b4f-d8e8-489a-928a-4838aa4f1507"
+    },
+    {
+      "name": "La Isla Cancín",
+      "id": "7baec10e-6d5d-4ce6-8dd7-e1f2e7ecdd14"
+    },
+    {
+      "name": "T4 Earth",
+      "id": "d02b41bf-9c92-40c4-9110-1a001ed32d72"
+    },
+    {
+      "name": "T4 Vine Garden ",
+      "id": "edf6119c-97d3-4a7d-8647-22771570007d"
+    },
+    {
+      "name": "T3 Natural Beauty",
+      "id": "72abe4c4-2dc8-47ac-b20f-a1163b0d490c"
+    },
+    {
+      "name": "Costa Maya Earth",
+      "id": "2d51e9ba-11e7-4a8d-976c-d2d379754a17"
+    },
+    {
+      "name": "Costa Maya Vine Garden ",
+      "id": "3e14f6a6-0154-418d-92f4-3e8e23eabab7"
+    },
+    {
+      "name": "Costa Maya Empire Tech",
+      "id": "8cf82445-421c-4163-8804-4a469d0a2d13"
+    },
+    {
+      "name": "Costa Maya Office",
+      "id": "29e44c8d-c4bf-4c7a-a93d-3eff2528559b"
+    },
+    {
+      "name": "Office HQ Cozumel",
+      "id": "b1933bbb-da95-4610-979e-21685361542a"
+    },
+    {
+      "name": "All Regions",
+      "id": "428320aa-92a0-431a-8220-b03187ff6855"
+    },
+    {
+      "name": "Office Costa Maya ",
+      "id": "ce730221-73be-4929-95ac-7669cf3214dd"
+    },
+    {
+      "name": "Mantarrayas 37",
+      "id": "1e6f2395-a1e6-4179-8682-33da13976e63"
+    },
+    {
+      "name": "Mantarrayas 33",
+      "id": "f72c2488-e787-4dbb-9f6f-9f4a79b9fcaf"
+    },
+    {
+      "name": "Palmas Reales",
+      "id": "16a86f32-bd49-4ff7-8b04-84bcbf3e7029"
+    },
+    {
+      "name": "14th North B",
+      "id": "b6d574e1-a963-4835-8928-f7c9a569c331"
+    },
+    {
+      "name": "14th North A",
+      "id": "71d406eb-a027-4065-b6f0-78ab1c16e1e5"
+    },
+    {
+      "name": "Gloria 1 ",
+      "id": "9db1be52-6868-4b33-bf33-ab6914172b3a"
+    },
+    {
+      "name": "Gloria 2 ",
+      "id": "4833a1ed-b0d8-4f87-90ad-9ddc60bfd2d5"
+    },
+    {
+      "name": "Corpus (Old Or)",
+      "id": "a17c9c14-89b0-4753-a21a-d03a43ef5ff6"
+    },
+    {
+      "name": "Cancun Airport",
+      "id": "b27af9f2-9aef-4d96-8217-0a0a6e34b973"
+    },
+    {
+      "name": "Cozumel Ports",
+      "id": "3afbbccd-6be5-443f-906f-821f8a5c6b8f"
+    },
+    {
+      "name": "KRISTAL P.L",
+      "id": "5a66a876-92a5-42d5-892b-148cbc946e5d"
+    },
+    {
+      "name": "Other No Classified",
+      "id": "4c02c873-d1d7-4184-a9eb-dfd5c6e87ad2"
+    },
+    {
+      "name": "Costa Maya Apartments",
+      "id": "e763bac3-f8b9-4e48-9541-58d5c6d28d43"
+    },
+    {
+      "name": "Tresor Rare",
+      "id": "06238ea7-825c-492f-8729-a654f1310db7"
+    },
+    {
+      "name": "Owners",
+      "id": "0ae23b1f-62b3-451f-a77b-cf4ae681019a"
+    },
+    {
+      "name": "Puerta Maya",
+      "id": "e887cd3c-a508-4902-8c98-219c3e6bcdb9"
+    },
+    {
+      "name": "Casa Chari",
+      "id": "e08a7a5e-f767-4c40-9970-a09ed230f473"
+    },
+    {
+      "name": "Bodega Oficina",
+      "id": "91d0e96d-df6f-4b3a-bf65-0fb333624cbc"
+    },
+    {
+      "name": "Costa Maya",
+      "id": "c8e31f66-f294-4f5b-83fc-3168fa7e807e"
+    },
+    {
+      "name": "Meridiano 87",
+      "id": "e6909524-e818-4ef0-8c80-acc629f3e1b1"
+    },
+    {
+      "name": "Church Apartments Mahahual",
+      "id": "287e7cfd-b84d-4624-a606-c73d1f3199ee"
+    },
+    {
+      "name": "Yellow Building Costa Maya ",
+      "id": "ddd14f76-195d-4131-adf5-7aa7f04ae72d"
+    },
+    {
+      "name": "White BUilding Costa Maya ",
+      "id": "f17b9853-f620-46d8-89a3-a1c33c0a41a0"
+    },
+    {
+      "name": "Baru Luxury Home",
+      "id": "c483a78b-076a-4f59-ac28-6821c4529b29"
+    },
+    {
+      "name": "SSA",
+      "id": "f7e7f4e9-f5ef-4c85-afe9-0b9d3826e194"
+    },
+    {
+      "name": "CASA EDWIN",
+      "id": "2a87d7d9-ec34-4258-bb6d-23a83e8b2b99"
+    },
+    {
+      "name": "30th Av #1",
+      "id": "ac3458ea-4d7f-4911-a804-cae6c59d07a7"
+    },
+    {
+      "name": "30th Av #2",
+      "id": "3c626ba0-edd5-4be6-afeb-209794206e4f"
+    },
+    {
+      "name": "Earth DR",
+      "id": "eb81df3b-df1f-4da1-aa42-c91d8d2b3230"
+    },
+    {
+      "name": "Empire DR",
+      "id": "cca48e78-531e-4fff-b440-3300fdce2ae7"
+    },
+    {
+      "name": "All Stores DR",
+      "id": "cdce11d6-67c8-453f-9aa4-d8052a7ec7e6"
+    },
+    {
+      "name": "Office Cancun",
+      "id": "e9ec28fa-1047-4bcc-99b8-800aefa63b19"
+    },
+    {
+      "name": "Casa Chedraui Molina",
+      "id": "1ad0f953-23d8-4d2f-b5e2-dc58672170b2"
+    },
+    {
+      "name": "Taino Bay TVR03",
+      "id": "a52c3444-3a4e-42bf-89b4-16d468079e2e"
+    },
+    {
+      "name": "Taino Bay TVR13",
+      "id": "8cb1057f-0d5c-4e5b-bc3e-1de0b05cf464"
+    },
+    {
+      "name": "Villa 60",
+      "id": "8f519971-0ea1-4035-b11c-ec32b8d2aec8"
+    },
+    {
+      "name": "Villa 53",
+      "id": "3c6792d7-0ec7-4d0e-8937-b7bcf6aaf79a"
+    },
+    {
+      "name": "Costa Maya Laundry and Super",
+      "id": "0a9bbced-3244-46c9-a9cd-2670143ac52b"
+    },
+    {
+      "name": "Office DR",
+      "id": "9c95e028-0141-462c-b97a-1777014f636a"
+    },
+    {
+      "name": "Gloria 8",
+      "id": "f38c0c47-f115-451d-bb58-3e783ae9ccce"
+    },
+    {
+      "name": "Escuelita Judia",
+      "id": "cfe9bb5d-5cb5-427c-bbe0-7dc15a093da7"
+    },
+    {
+      "name": "Gym Costa Maya",
+      "id": "64bf5dae-d66d-4abd-83db-959080e43713"
+    },
+    {
+      "name": "DECK 12 ",
+      "id": "7d580222-a129-4053-99f5-ed41319e2bcc"
+    },
+    {
+      "name": "Departamentos PJ",
+      "id": "2d78c983-f5e9-4e29-ae99-422b8042adfc"
+    },
+    {
+      "name": "DEPARTAMENTO PJ #2",
+      "id": "09f601a9-c30b-4ca3-8c7b-0eea804d0280"
+    },
+    {
+      "name": "DEPARTAMENTO PJ #3",
+      "id": "83c74792-c3f9-4f1f-b889-63c1bef18178"
+    },
+    {
+      "name": "11th Av Apartments",
+      "id": "9788f635-e811-4f45-ba1c-5f3978b315b4"
+    },
+    {
+      "name": "Recreation Room CM",
+      "id": "9eac2e5a-8026-43da-9e4e-f657c78e38e3"
+    },
+    {
+      "name": "11 AV depto. #3",
+      "id": "a1ab2940-cd2f-4bab-a051-dbe14e5374ae"
+    },
+    {
+      "name": "11 AV depto. #4",
+      "id": "cfd58a98-71b6-4942-87be-045e59949d7d"
+    },
+    {
+      "name": "Vehicles",
+      "id": "67e1cffc-b48b-4523-89d3-fb924375108d"
+    },
+    {
+      "name": "Casa 60av",
+      "id": "4b76f7b6-e18c-4081-9e5b-cebc95279fce"
+    },
+    {
+      "name": "Deptos de la 60",
+      "id": "00b3e05b-71a9-4120-89d1-01d487ffa3bf"
+    },
+    {
+      "name": "Departamento PJ #8",
+      "id": "efcf3581-1a0b-48a1-8a8d-809616038ad6"
+    },
+    {
+      "name": "Club Cozumel",
+      "id": "bfc89506-7d83-46ad-ac58-dbc3c0b0dbb2"
+    },
+    {
+      "name": "Gloria 6",
+      "id": "fc0f2436-6313-47a7-ad8f-864ac383f3ad"
+    },
+    {
+      "name": "Tree House",
+      "id": "95cbca06-56d6-43cd-b04f-c79f4496ebb2"
+    },
+    {
+      "name": "Earth Palapa",
+      "id": "973a531c-a6cd-4c8c-83c3-68bb2e2c9385"
+    },
+    {
+      "name": "Natural Beauty DR",
+      "id": "13aaafc3-fb06-4672-bce4-5078338aa2ca"
+    },
+    {
+      "name": "CANCUN Apartments",
+      "id": "61c2abe7-fdfc-42c4-966b-68e7b94be05f"
+    },
+    {
+      "name": "Office CDMX",
+      "id": "6fc00689-4277-44f9-bc7a-ce9605bed042"
+    },
+    {
+      "name": "Gloria #7",
+      "id": "d4cf07b9-78df-48db-a9ec-b93e0be26317"
+    },
+    {
+      "name": "T4 NB",
+      "id": "c0e6dce1-4360-40ec-b901-587a0135f5cf"
+    },
+    {
+      "name": "PUERTO RICO",
+      "id": "e43a22b5-3c82-4af3-8e34-d8c261e88896"
+    },
+    {
+      "name": "Office Honduras",
+      "id": "47d67145-b730-428e-a3b7-32516ec678d3"
+    },
+    {
+      "name": "DEPARTAMENTO PJ #5",
+      "id": "1f080a50-a09c-48c0-aea3-1473c848349e"
+    },
+    {
+      "name": "DEPARATAMENTO PJ #6",
+      "id": "3609b222-481b-4271-acbc-eee824abfaab"
+    },
+    {
+      "name": "Casa Condesa",
+      "id": "06fcc672-68a5-458b-89e7-44e7bc979175"
+    },
+    {
+      "name": "Departamento PJ #1",
+      "id": "e8f08bc3-6b35-44fb-a49a-231c1e6b4ebc"
+    },
+    {
+      "name": "SSA5 Natural Beauty",
+      "id": "651393bb-4137-417f-b5e8-664da94db972"
+    },
+    {
+      "name": "Prime Villa",
+      "id": "b405e5b7-1c3c-4b6e-9a45-0dba3cf18904"
+    },
+    {
+      "name": "Rejuvanation",
+      "id": "23701cf6-30ad-405b-8de4-65d70a7d61e1"
+    },
+    {
+      "name": "Tienda Club Cozumel",
+      "id": "321c7aab-b308-4065-b52d-3571db1feb8e"
+    },
+    {
+      "name": "Empire Tech Tulum Airport",
+      "id": "27304a5e-9629-4f06-8b0d-830d976dab31"
+    },
+    {
+      "name": "CM Stores",
+      "id": "a754da2f-e373-4067-9af4-1382574ec3aa"
+    },
+    {
+      "name": "Gloria 9",
+      "id": "c01478e1-e294-4dba-8e3c-e6570c6bd4cf"
+    },
+    {
+      "name": "T3 Kiosk Empire Tech",
+      "id": "bba46d01-4929-4f83-86bd-f5334d8e10a5"
+    },
+    {
+      "name": "CM New Building",
+      "id": "cc4e1a77-a183-48ce-a05f-ca742586b290"
+    },
+    {
+      "name": "T4 Beyond the Soap",
+      "id": "274957b2-d5ed-41e9-91a9-bec490d0dabe"
+    },
+    {
+      "name": "onlin",
+      "id": "2b384a36-dfe8-451f-846f-18b2ea294952"
+    },
+    {
+      "name": "Online",
+      "id": "98459376-566e-48e8-95fb-30ebddfb36f9"
+    },
+    {
+      "name": "Cabo Rojo",
+      "id": "40d86ea6-9d78-486f-91d7-c20779c3701d"
+    },
+    {
+      "name": "Depto. Novara",
+      "id": "9cb1d624-83a9-4b5c-8da7-803d54f2b6ae"
+    },
+    {
+      "name": "Asfur",
+      "id": "6fb9862e-923e-4d8b-8c69-8a3403805e04"
+    },
+    {
+      "name": "The Maria 303",
+      "id": "39ffc40a-d9bb-4513-9edc-d9e5070f090b"
+    },
+    {
+      "name": "The Maria 403",
+      "id": "79e40ef4-9d5b-4fa6-b8fb-b8d0e2e3dcd2"
+    },
+    {
+      "name": "Apartment DR",
+      "id": "9903fcd6-511e-4a0a-9369-77942ca0773a"
+    },
+    {
+      "name": "Empire Tech Spa DR",
+      "id": "2883cb5f-ea0f-4ef3-a017-8db9b6181e94"
+    },
+    {
+      "name": "Empire Tech DR",
+      "id": "f83487a2-52de-4a49-812c-afa9c4a944cb"
+    },
+    {
+      "name": "Distrito 102",
+      "id": "9cf7efcc-5c8d-49f7-bcc3-b4ea2495c1dc"
+    },
+    {
+      "name": "boyand",
+      "id": "829fa111-8bbc-44fa-b34b-a578376bbba9"
+    },
+    {
+      "name": "Riviera DR",
+      "id": "39dece35-5b6a-4f9b-b297-4c49c9640326"
+    },
+    {
+      "name": "Samana",
+      "id": "7c2c0bbf-addd-40a7-a873-a6a7af65e295"
+    },
+    {
+      "name": "royale",
+      "id": "71b8c1df-4eff-4456-8efb-3fc32f69c75f"
+    },
+    {
+      "name": "ro",
+      "id": "3346c649-809c-41af-a540-357b3f5f0a2a"
+    },
+    {
+      "name": "Kiosk PL",
+      "id": "aa03b8e5-8bb8-4dd7-ae6b-169144868adf"
+    },
+    {
+      "name": "DEPARTAMENTO PJ #4",
+      "id": "01dc4730-7cfc-4c85-b541-f95dac2405c1"
+    },
+    {
+      "name": "DEPARTAMENTO PJ #10",
+      "id": "de147acc-7b0e-43a2-ab73-3ebb7306e1e0"
+    },
+    {
+      "name": "3800",
+      "id": "2d460880-8d99-400c-b605-2729d689d372"
+    },
+    {
+      "name": "Shabbat House",
+      "id": "39199f52-7013-46f5-9951-7f6d560bcd3a"
+    },
+    {
+      "name": "Natural Beauty TB",
+      "id": "fd88a89d-c201-4ec5-bbaf-ed973e43b7ff"
+    },
+    {
+      "name": "30th Av #4",
+      "id": "5a4fde7a-345a-4a9c-a0b2-e57c70d06597"
+    },
+    {
+      "name": "spa",
+      "id": "565d0a75-d31e-48de-9d63-429430e9045f"
+    },
+    {
+      "name": "OOF",
+      "id": "a208b1b9-d0b1-43a8-b20f-47006a176554"
+    },
+    {
+      "name": "Prueba 2",
+      "id": "0ad27e15-d9a1-4fe3-b8ce-1f19560a3af8"
+    },
+    {
+      "name": "Kiosk SSA",
+      "id": "3f612d09-e9d2-46b4-bb9e-c0e3112649a8"
+    },
+    {
+      "name": "2500",
+      "id": "73ce6f29-2125-4546-8f30-326b219ce14f"
+    },
+    {
+      "name": "vine garden T4",
+      "id": "496e1b86-4172-4746-a311-9a942cb79931"
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "version": "1.2",
+  "description": "Reglas de reembolsos y chargebacks para Morena Mia. Incluye procedimientos de refund por Wire, e-Transfer, Cheque, DocuSign y manejo de disputas bancarias.",
+  "topics": [
+    {
+      "id": "refund_procedure",
+      "name": "Refund Procedure",
+      "content": {
+        "pre_requisites": [
+          "Customer must NOT have an open dispute. If they do, they must cancel it first.",
+          "If purchase amount is less than $500 USD and compensation is rejected, refund is automatically approved.",
+          "If purchase amount is $500 USD or more, escalate to superiors."
+        ],
+        "refund_methods_by_country": {
+          "Canada": "Wire Transfer (preferred) or e‑Transfer (if customer requests)",
+          "USA": "Physical Check",
+          "Mexico": "Wire Transfer or Check"
+        },
+        "wire_transfer": {
+          "process": "Send DocuSign for bank details (SWIFT, ABA, Account, Billing Address). Verify that the name matches the original cardholder and that the address is the billing address (for tax compliance and fraud prevention).",
+          "required_fields": [
+            "Customer name",
+            "Bank name",
+            "Bank account number",
+            "Billing address",
+            "Phone",
+            "SWIFT code",
+            "Amount in USD",
+            "Intermediary bank info (if provided)"
+          ],
+          "customer_confirmation": "Must confirm in writing: (1) No dispute opened/opening, (2) Acceptance of refund as final resolution."
+        },
+        "e_transfer": {
+          "process": "Only requires the email linked to the bank account. Same written confirmations required."
+        },
+        "check": {
+          "process": "Issue a physical check mailed to the customer's address. Provide photo of the check and tracking. Follow up until customer confirms receipt.",
+          "new_customer_payment_address": {
+            "note": "When customers need to send a check to us (e.g., for Shalem payments), use this address:",
+            "payable_to": "Morena Mia USA Inc",
+            "address": "4023 Kennett Pike #50434, Wilmington, DE 19807"
+          }
+        },
+        "task_creation_for_refund": {
+          "duplicate_task": "Duplicate the customer service task and rename as 'INVOICE + CHECK / WIRE TRANSFER + FULL/PARTIAL REFUND'. Move to the 'REFUND' section, assign to Lorenzo.",
+          "fields_to_verify": ["Name", "Email", "Phone", "Address", "Amount ($USD)"],
+          "final_check": "Double‑check all data: amount, name, account, address, and completeness."
+        },
+        "docusign": {
+          "when_used": "Required for Wire Transfer and Check refunds.",
+          "steps": [
+            "Click 'Review Document'",
+            "Click 'Continue'",
+            "Click 'Sign' icon",
+            "Draw or select a signature style (must match ID)",
+            "Attach a photo of a government‑issued ID (must match the cardholder)",
+            "Click 'Finish' – document is sent automatically to our office"
+          ],
+          "platform": "Can be completed on both computer and phone.",
+          "common_issue": "If the ID is invalid (e.g., photo of something else), request a new DocuSign and explain the requirement."
+        }
+      }
+    },
+    {
+      "id": "dispute_chargeback",
+      "name": "Dispute / Chargeback Procedure",
+      "content": {
+        "definition": "A chargeback occurs when a cardholder asks their bank to reverse a payment. The bank temporarily removes funds and starts an investigation (up to 3 months).",
+        "policy": "If a dispute is opened, any previous offers (refunds or gifts) are no longer available. The store policy is signed, so the bank may close the case in our favor.",
+        "actions": [
+          "Send the 'Dispute Speech' macro from Zendesk explaining the process and consequences.",
+          "If the dispute is closed in our favor, replacements can still be sent, but refunds are not available.",
+          "To proceed with a refund, the customer must cancel the dispute and provide a closure letter from the bank."
+        ],
+        "template_example": "Please do not initiate a dispute (chargeback) with your bank. A dispute freezes the funds and delays your refund. If you have already contacted your bank, please let us know so we can guide you."
+      }
+    }
+  ]
+}

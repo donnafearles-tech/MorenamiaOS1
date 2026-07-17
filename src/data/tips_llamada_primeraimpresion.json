@@ -1,0 +1,62 @@
+{
+  "comunicacion_telefonica": {
+    "axiomas_y_principios": [
+      {
+        "nombre": "El principio de la primera impresión auditiva",
+        "descripcion": "En el momento en que contestas el teléfono y dices 'hola', las personas infieren todo tipo de cosas sobre ti, como tu inteligencia y tu actitud, basándose únicamente en tu voz[cite: 127]."
+      },
+      {
+        "nombre": "El principio de la declaración de propósito",
+        "descripcion": "Una declaración de propósito es un 'regalo' que engancha a las personas con algo que valoran; es una excelente manera de comenzar una llamada telefónica[cite: 368, 369]."
+      }
+    ],
+    "tecnicas": [
+      {
+        "nombre": "Llamada sobre el correo electrónico",
+        "descripcion": "Considera usar el teléfono. Aunque el correo electrónico es rápido, a veces una llamada telefónica es más rápida y evita jugar al 'ping pong' de correos electrónicos durante todo el día[cite: 931, 932]."
+      },
+      {
+        "nombre": "El mensaje de voz como mini-presentación",
+        "descripcion": "Debes considerar tu mensaje de voz como una mini-presentación en la que tienes 8 segundos para causar una buena impresión[cite: 2040]."
+      },
+      {
+        "nombre": "Estructura del mensaje de voz",
+        "descripcion": "Cualquier mensaje importante debe tener una apertura (quién eres y por qué llamas), un desarrollo (detalles críticos) y un cierre (próximos pasos)[cite: 2046, 2047]."
+      }
+    ],
+    "consejos_y_reglas": [
+      {
+        "nombre": "Evitar disculpas iniciales",
+        "descripcion": "No abras tu llamada telefónica o mensaje de voz disculpándote por interrumpir[cite: 651, 653]."
+      },
+      {
+        "nombre": "No olvidar el número de contacto",
+        "descripcion": "Asegúrate siempre de dejar tu número de teléfono para que la otra persona pueda devolverte la llamada[cite: 670]."
+      },
+      {
+        "nombre": "Adaptarse a la audiencia (Reflejo de velocidad)",
+        "descripcion": "Escucha el mensaje de salida de la otra persona en el buzón de voz (especialmente la velocidad) y responde en el mismo tono y velocidad[cite: 1061]."
+      },
+      {
+        "nombre": "Ralentizar al dar números telefónicos",
+        "descripcion": "Independientemente de la velocidad a la que hables, nunca grites tu número de teléfono al final del mensaje de voz; dilo a un ritmo que permita ser anotado[cite: 1054, 1062]."
+      },
+      {
+        "nombre": "Controlar la comunicación no verbal",
+        "descripcion": "Aunque nadie te vea por teléfono, el lenguaje corporal importa. Levántate, muévete un poco para sonar más dinámico y sonríe para sonar más amigable[cite: 2052, 2053]."
+      },
+      {
+        "nombre": "Mantener fresco el mensaje de salida",
+        "descripcion": "Actualiza tu propio mensaje de voz regularmente mencionando el día de la semana o la fecha actual[cite: 2061]."
+      },
+      {
+        "nombre": "Establecer expectativas realistas",
+        "descripcion": "No prometas en tu buzón de voz devolver las llamadas en 30 minutos si no vas a poder cumplir con ese compromiso[cite: 2063, 2064]."
+      },
+      {
+        "nombre": "Hacer una pausa antes de contestar",
+        "descripcion": "Antes de responder a una llamada telefónica, haz una pausa, respira, sonríe y luego contesta la llamada[cite: 2504]."
+      }
+    ]
+  }
+}

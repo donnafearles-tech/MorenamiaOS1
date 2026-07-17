@@ -1,0 +1,90 @@
+{
+  "field_id": "47368acc-f166-4b7b-ae11-ee0001cd0ad1",
+  "field_name": "Region",
+  "options": [
+    {
+      "name": "Costa Maya ",
+      "id": "79865550-2fbc-445d-a9ae-0ba9b4341814"
+    },
+    {
+      "name": "Cozumel",
+      "id": "4605ad70-8ee6-4704-beb7-0de90f382986"
+    },
+    {
+      "name": "Cancún ",
+      "id": "5e4bb589-4a72-49a5-a9ca-e7c422d1d752"
+    },
+    {
+      "name": "Melgar ",
+      "id": "c737d4d1-2c52-401d-90f0-e774377bfefe"
+    },
+    {
+      "name": "Office Cancun",
+      "id": "66aeea9b-b9f0-4d67-b4f2-37771bcbd641"
+    },
+    {
+      "name": "All Regions",
+      "id": "c7ecd9d0-3d5e-4fec-b049-77672c4db9e4"
+    },
+    {
+      "name": "Puerta Maya",
+      "id": "7f4c0978-975c-4ef4-b290-4b89ab9e918b"
+    },
+    {
+      "name": "Punta Langosta",
+      "id": "6b2e1d55-8785-4c7a-80aa-70e144e29156"
+    },
+    {
+      "name": "Ports",
+      "id": "e2c0079d-4a95-48e8-a19f-3ce8e62dbd23"
+    },
+    {
+      "name": "Dominican Republic",
+      "id": "f2f6a68e-4357-4462-8766-068416e4ace0"
+    },
+    {
+      "name": "Office Cozumel",
+      "id": "9b44bfc7-e8d2-43a9-b3c8-f1f1ad2fafda"
+    },
+    {
+      "name": "Office Costa Maya",
+      "id": "e7c7aec4-5a13-464a-ad06-8cfa1b8c551e"
+    },
+    {
+      "name": "Office CDMX",
+      "id": "941653e8-6cfb-4a7d-b3be-0863782c31af"
+    },
+    {
+      "name": "SSA",
+      "id": "69ce8e0a-323f-4c3f-a48d-3a9d37893e62"
+    },
+    {
+      "name": "PUERTO RICO",
+      "id": "673cb433-3296-4241-bc89-2717613bdde7"
+    },
+    {
+      "name": "Honduras",
+      "id": "eaeb0137-488b-4074-8f3c-476bd0e05cb2"
+    },
+    {
+      "name": "Tienda Club Cozumel",
+      "id": "2896d605-1673-4c35-b232-c31602ced836"
+    },
+    {
+      "name": "Tulum",
+      "id": "689bc25e-d339-418c-9658-965783246cd9"
+    },
+    {
+      "name": "Call Center CDMX",
+      "id": "f3a8bd05-027e-4be5-bd9d-997f5f4b36e1"
+    },
+    {
+      "name": "Online",
+      "id": "9dbe8d31-a57c-4eb3-bf5c-477419e1dae6"
+    },
+    {
+      "name": "cnc",
+      "id": "2226de57-e448-4cf3-b5b6-a8a9a199a4d2"
+    }
+  ]
+}
