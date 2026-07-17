@@ -692,20 +692,9 @@ app.post(["/zendesk/internal-note", "/api/zendesk/internal-note-raw"], async (re
   const token = zapier_token || process.env.ZAPIER_MCP_TOKEN || "";
   const zapierUrl = `https://mcp.zapier.com/api/v1/connect?token=${token}`;
 
-  const params = {
-    selected_api: "ZendeskV2CLIAPI",
-    action: "ticket_comment",
-    instructions: `Add an INTERNAL note (private) to ticket ${ticket_id}. The note is: '${note_body}'. Execute immediately.`,
-    params: {
-      id: String(ticket_id),
-      comment: note_body,
-      public: "no"
-    }
-  };
-
   try {
-    const result = await callZapierMcp(zapierUrl, params, "execute_zapier_write_action");
-    return res.json({ status: "ok", message: "Nota interna agregada", response: result });
+    const result = await addNoteByTicketIdRaw(zapierUrl, String(ticket_id), note_body);
+    return res.json({ status: "ok", message: "Nota interna agregada", response: result.note_result });
   } catch (e: any) {
     console.error(`❌ Error: ${e}`);
     return res.status(500).json({ error: e.message });
@@ -784,16 +773,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 
   try {
     console.log(`📝 Paso 1/2: Nota interna...`);
-    const noteResult = await callZapierMcp(zapierUrl, {
-      selected_api: "ZendeskV2CLIAPI",
-      action: "ticket_comment",
-      instructions: `Add INTERNAL note to ticket ${ticket_id}: '${resolution_note || "Ticket resuelto"}'. Execute immediately.`,
-      params: {
-        id: String(ticket_id),
-        comment: `[RESOLUCION] ${resolution_note || "Ticket resuelto"}`,
-        public: "no"
-      }
-    }, "execute_zapier_write_action");
+    const noteResult = await addNoteByTicketIdRaw(zapierUrl, String(ticket_id), `[RESOLUCION] ${resolution_note || "Ticket resuelto"}`);
     results.note_added = "ok";
 
     console.log(`🔒 Paso 2/2: Cerrando...`);
@@ -812,7 +792,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
       status: "ok",
       message: `Ticket ${ticket_id} cerrado con nota`,
       steps: results,
-      note_response: noteResult,
+      note_response: noteResult.note_result,
       close_response: closeResult
     });
   } catch (e: any) {
@@ -4370,90 +4350,17 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 
 		if (ticket_number && ticket_number.trim()) {
 		  const cleanTicketNum = ticket_number.trim();
-		  const isNumericId = /^\d+$/.test(cleanTicketNum);
-		  let targetTicketId = cleanTicketNum;
 
 		  try {
 			console.log(`🚀 Intentando cerrar Ticket de Zendesk "${cleanTicketNum}" mediante Zapier MCP`);
 			
-			if (isNumericId) {
-			  console.log(`🔍 El Ticket es un ID numérico (${cleanTicketNum}). Buscando detalles con searchTicketById...`);
-			  try {
-				const searchResult = await searchTicketById(zapierUrl, cleanTicketNum);
-				console.log("✅ Ticket encontrado vía searchTicketById:", searchResult);
-				
-				let ticketSubject: string | null = null;
-				if (typeof searchResult === "object" && searchResult !== null) {
-				  const results = searchResult.results;
-				  if (results) {
-					if (Array.isArray(results) && results.length > 0) {
-					  ticketSubject = results[0].subject || null;
-					} else if (typeof results === "object") {
-					  ticketSubject = results.subject || null;
-					}
-				  }
-				  if (!ticketSubject) {
-					ticketSubject = searchResult.subject || null;
-				  }
-				}
-				if (ticketSubject) {
-				  console.log(`✅ Usando subject exacto para operaciones: "${ticketSubject}"`);
-				  targetTicketId = ticketSubject;
-				}
-			  } catch (searchErr: any) {
-				console.log(`ℹ️ searchTicketById falló para ID ${cleanTicketNum}: ${searchErr.message}. Usando ID directo como fallback.`);
-				targetTicketId = cleanTicketNum;
-			  }
-			}
-			
 			// Paso 1: Agregar nota interna (comentario privado)
 			console.log(`📝 Paso 1/2: Agregando nota interna al ticket "${cleanTicketNum}"...`);
-			let noteResult = null;
 			const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
 			const zendeskSub = subdomain.toLowerCase().trim();
 			const updateTicketUrl = `https://${zendeskSub}.zendesk.com/api/v2/tickets/${cleanTicketNum}.json`;
-
-			try {
-			  noteResult = await callZapierMcp(zapierUrl, {
-				selected_api: "ZendeskV2CLIAPI",
-				action: "_zap_raw_request",
-				instructions: `Make a PUT request to add a private/internal closure comment to Zendesk ticket with ID ${cleanTicketNum}. URL is "${updateTicketUrl}".`,
-				params: {
-				  url: updateTicketUrl,
-				  method: "PUT",
-				  headers: {
-					"Content-Type": "application/json"
-				  },
-				  body: JSON.stringify({
-					ticket: {
-					  comment: {
-						body: `CLOSURE NOTE: ${translated}`,
-						public: false
-					  }
-					}
-				  }),
-				  fail_on_errors: "false"
-				},
-				output: "ticket"
-			  });
-			  console.log("✅ Nota interna agregada vía raw PUT:", noteResult);
-			} catch (rawErr: any) {
-			  console.log(`ℹ️ Adición de nota raw falló, intentando método clásico: ${rawErr.message}`);
-			  noteResult = await callZapierMcp(zapierUrl, {
-				selected_api: "ZendeskV2CLIAPI",
-				action: "ticket_comment",
-				instructions: `Add an INTERNAL note (private, not visible to customer) to the ticket with exact numeric ID "${cleanTicketNum}". The content of the comment/note is exactly: "CLOSURE NOTE: ${translated}". Set its public visibility to 'no'. Do not ask for confirmation.`,
-				params: {
-				  id: cleanTicketNum,
-				  ticket: cleanTicketNum,
-				  comment: `CLOSURE NOTE: ${translated}`,
-				  body: `CLOSURE NOTE: ${translated}`,
-				  public: "no"
-				},
-				output: "id, status, subject"
-			  });
-			  console.log("✅ Nota interna agregada vía clásica:", noteResult);
-			}
+			const noteResult = await addNoteByTicketIdRaw(zapierUrl, cleanTicketNum, `CLOSURE NOTE: ${translated}`);
+			console.log("✅ Nota interna agregada:", noteResult.note_result);
 
 			// Paso 2: Cerrar ticket usando la acción update_ticket_v2 o raw PUT
 			console.log(`🔒 Paso 2/2: Cerrando ticket "${cleanTicketNum}"...`);
