@@ -694,7 +694,12 @@ app.post(["/zendesk/internal-note", "/api/zendesk/internal-note-raw"], async (re
 
   try {
     const result = await addNoteByTicketIdRaw(zapierUrl, String(ticket_id), note_body);
-    return res.json({ status: "ok", message: "Nota interna agregada", response: result.note_result });
+    return res.json({ 
+      status: "ok", 
+      message: "Nota interna agregada", 
+      ticket_found: result.ticket_found,
+      response: result.note_result 
+    });
   } catch (e: any) {
     console.error(`❌ Error: ${e}`);
     return res.status(500).json({ error: e.message });
@@ -773,7 +778,8 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 
   try {
     console.log(`📝 Paso 1/2: Nota interna...`);
-    const noteResult = await addNoteByTicketIdRaw(zapierUrl, String(ticket_id), `[RESOLUCION] ${resolution_note || "Ticket resuelto"}`);
+    const noteText = `[RESOLUCION] ${resolution_note || "Ticket resuelto"}`;
+    const noteResult = await addNoteByTicketIdRaw(zapierUrl, String(ticket_id), noteText);
     results.note_added = "ok";
 
     console.log(`🔒 Paso 2/2: Cerrando...`);
@@ -891,7 +897,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 			params: {
 			  url: `https://${zendeskSub}.zendesk.com/api/v2/tickets/${cleanTicketNum}.json`,
 			  method: "GET",
-			  fail_on_errors: "false"
+			  fail_on_errors: false
 			}
 		  });
 
@@ -3549,7 +3555,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 						  notes: `Store: ${cleanStore}\nRegion: ${cleanRegion}\nComment: ${cleanComment}`
 						}
 					  }),
-					  fail_on_errors: "false"
+					  fail_on_errors: false
 					},
 					output: "user"
 				  });
@@ -3581,7 +3587,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 							details: params.details
 						  }
 						}),
-						fail_on_errors: "false"
+						fail_on_errors: false
 					  },
 					  output: "user"
 					});
@@ -3635,7 +3641,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 							  notes: `Store: ${cleanStore}\nRegion: ${cleanRegion}\nComment: ${cleanComment}`
 							}
 						  }),
-						  fail_on_errors: "false"
+						  fail_on_errors: false
 						},
 						output: "user"
 					  });
@@ -3700,7 +3706,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 					"Content-Type": "application/json"
 				  },
 				  body: JSON.stringify(ticketPayload),
-				  fail_on_errors: "false"
+				  fail_on_errors: false
 				},
 				output: "ticket, results"
 			  }, "execute_zapier_write_action");
@@ -3858,7 +3864,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 			  "Content-Type": "application/json"
 			},
 			body: JSON.stringify(ticketPayload),
-			fail_on_errors: "false"
+			fail_on_errors: false
 		  },
 		  output: "ticket, results"
 		}, "execute_zapier_write_action");
@@ -4354,16 +4360,16 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		  try {
 			console.log(`🚀 Intentando cerrar Ticket de Zendesk "${cleanTicketNum}" mediante Zapier MCP`);
 			
-			// Paso 1: Agregar nota interna (comentario privado)
+			// Paso 1: Agregar nota interna usando el helper canónico addNoteByTicketIdRaw (que maneja pre-lookup internamente)
 			console.log(`📝 Paso 1/2: Agregando nota interna al ticket "${cleanTicketNum}"...`);
-			const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
-			const zendeskSub = subdomain.toLowerCase().trim();
-			const updateTicketUrl = `https://${zendeskSub}.zendesk.com/api/v2/tickets/${cleanTicketNum}.json`;
 			const noteResult = await addNoteByTicketIdRaw(zapierUrl, cleanTicketNum, `CLOSURE NOTE: ${translated}`);
-			console.log("✅ Nota interna agregada:", noteResult.note_result);
+			console.log("✅ Nota interna agregada vía canonical helper:", noteResult);
 
 			// Paso 2: Cerrar ticket usando la acción update_ticket_v2 o raw PUT
 			console.log(`🔒 Paso 2/2: Cerrando ticket "${cleanTicketNum}"...`);
+			const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
+			const zendeskSub = subdomain.toLowerCase().trim();
+			const updateTicketUrl = `https://${zendeskSub}.zendesk.com/api/v2/tickets/${cleanTicketNum}.json`;
 			let closeResult = null;
 			try {
 			  closeResult = await callZapierMcp(zapierUrl, {
@@ -4381,7 +4387,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 					  status: "solved"
 					}
 				  }),
-				  fail_on_errors: "false"
+				  fail_on_errors: false
 				},
 				output: "ticket"
 			  });

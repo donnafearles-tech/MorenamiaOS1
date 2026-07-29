@@ -154,14 +154,42 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
     }
   };
 
+  // Helper to check if a task matches a filter category
+  const isTaskInFilter = (t: Task, filterKey: string) => {
+    if (filterKey === "TODOS") return true;
+    const statusLower = (t.status || "").toLowerCase();
+    const pInfo = getPriorityInfo(t.priority);
+
+    if (filterKey === "ALERTAS") {
+      return (
+        statusLower === "deadline" ||
+        statusLower.includes("deadline") ||
+        statusLower.includes("alerta") ||
+        statusLower.includes("urgente") ||
+        pInfo.isUrgent
+      );
+    }
+    if (filterKey === "ESPERANDO") {
+      return (
+        statusLower === "cs reply" ||
+        statusLower.includes("cs reply") ||
+        statusLower.includes("esperando") ||
+        statusLower.includes("reply")
+      );
+    }
+    if (filterKey === "PAUSA") {
+      return (
+        statusLower.includes("waiting") ||
+        statusLower.includes("pausa") ||
+        statusLower.includes("pause") ||
+        statusLower.includes("hold")
+      );
+    }
+    return false;
+  };
+
   // Filtering tasks
-  const filteredTasks = tasks.filter(t => {
-    if (selectedFilter === "TODOS") return true;
-    if (selectedFilter === "ALERTAS" && t.status.toLowerCase() === "deadline") return true;
-    if (selectedFilter === "ESPERANDO" && t.status.toLowerCase() === "cs reply") return true;
-    if (selectedFilter === "PAUSA" && t.status.toLowerCase().includes("waiting")) return true;
-    return true;
-  });
+  const filteredTasks = tasks.filter(t => isTaskInFilter(t, selectedFilter));
 
   // Sorting tasks by chosen criteria (priority vs timezone)
   const sortedTasks = [...filteredTasks].sort((a, b) => {
@@ -183,7 +211,7 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
         <div>
           <h2 className="text-3xl font-bold font-serif tracking-tight text-white mb-1.5">Fila de Tareas en Vivo</h2>
           <p className="text-sm text-white/70 font-sans">
-            Optimizado para ordenar las tareas de este a oeste según el huso horario local de cada cliente o por nivel de prioridad.
+            Optimizado para ordenar las tareas según husos horarios o prioridades. ¡Las tareas se distribuyen radialmente de adentro hacia afuera según su prioridad: las más cercanas al centro son las más urgentes!
           </p>
         </div>
 
@@ -211,19 +239,29 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 glass-card p-4">
         {/* State filters */}
         <div className="flex flex-wrap gap-1.5">
-          {["TODOS", "ALERTAS", "ESPERANDO", "PAUSA"].map(filter => (
-            <button
-              key={filter}
-              onClick={() => setSelectedFilter(filter)}
-              className={`px-4 py-2 rounded-xl text-xs font-semibold tracking-wide transition-all duration-300 ${
-                selectedFilter === filter
-                  ? "bg-white/20 border border-white/30 text-white shadow-md font-bold"
-                  : "text-white/60 hover:text-white hover:bg-white/5"
-              }`}
-            >
-              {filter}
-            </button>
-          ))}
+          {["TODOS", "ALERTAS", "ESPERANDO", "PAUSA"].map(filter => {
+            const count = tasks.filter(t => isTaskInFilter(t, filter)).length;
+            return (
+              <button
+                key={filter}
+                onClick={() => setSelectedFilter(filter)}
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold tracking-wide transition-all duration-300 flex items-center gap-1.5 cursor-pointer ${
+                  selectedFilter === filter
+                    ? "bg-white/20 border border-white/30 text-white shadow-md font-bold"
+                    : "text-white/60 hover:text-white hover:bg-white/5"
+                }`}
+              >
+                <span>{filter}</span>
+                <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
+                  selectedFilter === filter
+                    ? "bg-white/30 text-white"
+                    : "bg-white/10 text-white/70"
+                }`}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
         </div>
 
         {/* Sorting Toggles + View Mode Toggles */}
@@ -297,12 +335,23 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
               >
                 {sortedTasks.slice(0, 12).map((task, idx) => {
                   const angle = (idx * 360) / Math.min(sortedTasks.length, 12);
-                  const radius = 160; // distance from center
+                  const pInfo = getPriorityInfo(task.priority);
+                  
+                  // Distribución radial por prioridad (menor radio = más urgente)
+                  // Alta/Urgent (rank 1) -> Radio 110 (cerca al centro)
+                  // Media/Normal (rank 2) -> Radio 148 (órbita media)
+                  // Baja/Low (rank 3)     -> Radio 182 (órbita exterior)
+                  let radius = 182;
+                  if (pInfo.rank === 1) {
+                    radius = 110;
+                  } else if (pInfo.rank === 2) {
+                    radius = 148;
+                  }
+
                   const radians = (angle * Math.PI) / 180;
                   const x = radius * Math.cos(radians);
                   const y = radius * Math.sin(radians);
 
-                  const pInfo = getPriorityInfo(task.priority);
                   const isFirst = idx === 0;
                   const isDeadline = task.status.toLowerCase() === "deadline" || pInfo.isUrgent;
 
