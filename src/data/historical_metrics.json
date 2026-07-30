@@ -1,0 +1,22 @@
+{
+  "history": [
+    {
+      "timestamp": "2026-07-29T16:23:55.907Z",
+      "distribution": {
+        "Kansas": 1,
+        "Florida": 1.9,
+        "Indiana": 1,
+        "Illinois": 1,
+        "Missouri": 1,
+        "Virginia": 1,
+        "Minnesota": 1,
+        "Tennessee": 1,
+        "California": 1,
+        "Pennsylvania": 1.9,
+        "Otros / No US": 3.8,
+        "Sin teléfono": 84.8
+      },
+      "total_clients": 105
+    }
+  ]
+}
