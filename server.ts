@@ -4,33 +4,43 @@
 	const fsp = fs.promises;
 	import { createServer as createViteServer } from "vite";
 	import dotenv from "dotenv";
-	import { getStateByPhone } from "./src/data/areaCodes";
+	import { createRequire } from "module";
+	const require = createRequire(import.meta.url);
+	const archiver = require("archiver");
+	import { getStateByPhone, getTimezoneByPhone } from "./src/data/areaCodes";
 
 	dotenv.config();
 
-	// Auto-regenerate .env from .env.example if missing, preserving the known GROQ_API_KEY
+	// Ensure dummy placeholder values never override real system-injected environment variables
+	const PLACEHOLDERS = ["MY_GEMINI_API_KEY", "MY_GROQ_API_KEY", "MY_APP_URL"];
+
+	// Auto-sync .env with .env.example if missing or if .env.example has updated values
 	try {
 	  const envPath = ".env";
 	  const examplePath = ".env.example";
 	  if (!fs.existsSync(envPath) && fs.existsSync(examplePath)) {
 		console.log("[Self-Healing] Recreating .env from .env.example...");
 		let content = fs.readFileSync(examplePath, "utf8");
-		
-		// Inject the known Groq API Key if it's currently MY_GROQ_API_KEY or missing
 		if (content.includes("MY_GROQ_API_KEY") && process.env.GROQ_API_KEY) {
 		  content = content.replace("MY_GROQ_API_KEY", process.env.GROQ_API_KEY);
 		}
-		
 		fs.writeFileSync(envPath, content, "utf8");
-		// Reload dotenv with the newly created .env file
 		dotenv.config();
+	  } else if (fs.existsSync(examplePath)) {
+		const exampleConfig = dotenv.parse(fs.readFileSync(examplePath));
+		for (const key of Object.keys(exampleConfig)) {
+		  const exVal = exampleConfig[key].trim().replace(/^["']+|["']+$/g, "").trim();
+		  if (exVal && exVal !== "tu_token_aqui" && !PLACEHOLDERS.includes(exVal)) {
+		    if (!process.env[key] || process.env[key] === "" || process.env[key] === "tu_token_aqui") {
+		      process.env[key] = exVal;
+		    }
+		  }
+		}
 	  }
 	} catch (err) {
-	  console.error("[Self-Healing] Error recreating .env file:", err);
+	  console.error("[Self-Healing] Error syncing .env file:", err);
 	}
 
-	// Ensure dummy placeholder values never override real system-injected environment variables
-	const PLACEHOLDERS = ["MY_GEMINI_API_KEY", "MY_GROQ_API_KEY", "MY_APP_URL"];
 	for (const key of Object.keys(process.env)) {
 	  let val = process.env[key];
 	  if (val !== undefined) {
@@ -50,7 +60,7 @@
 		for (const key of Object.keys(exampleConfig)) {
 		  if (!process.env[key] && exampleConfig[key]) {
 			let val = exampleConfig[key].trim().replace(/^["']+|["']+$/g, "").trim();
-			if (val !== "" && !PLACEHOLDERS.includes(val)) {
+			if (val !== "" && val !== "tu_token_aqui" && !PLACEHOLDERS.includes(val)) {
 			  process.env[key] = val;
 			}
 		  }
@@ -82,10 +92,10 @@
 	  process.env.SHAREFILE_API_BASE_URL = tokenCand;
 	}
 
-	// Normalizar el subdominio de Zendesk para corregir posibles typos como "vipcpsmetics"
+	// Normalizar el subdominio de Zendesk para corregir posibles typos o fallbacks erróneos
 	if (process.env.ZENDESK_SUBDOMAIN) {
 	  const cleanSub = process.env.ZENDESK_SUBDOMAIN.trim().toLowerCase().replace(/^"+|"+$/g, "");
-	  if (cleanSub === "vipcpsmetics" || cleanSub === "vipcosmetic" || cleanSub === "vipcpsmetic") {
+	  if (!cleanSub || cleanSub === "vipcpsmetics" || cleanSub === "vipcosmetic" || cleanSub === "vipcpsmetic" || cleanSub === "emacaribbean" || cleanSub.includes("emacaribbean")) {
 		process.env.ZENDESK_SUBDOMAIN = "vipcosmetics";
 	  } else {
 		process.env.ZENDESK_SUBDOMAIN = cleanSub;
@@ -223,7 +233,13 @@
 			localParsed = dotenv.parse(localContent);
 		  }
 		  
-		  const merged = { ...remoteEnv, ...localParsed };
+		  // Remote cloud environment variables take precedence over local container .env files
+		  const merged: any = { ...localParsed };
+		  for (const [k, v] of Object.entries(remoteEnv)) {
+			if (v !== undefined && v !== null && String(v).trim() !== "") {
+			  merged[k] = String(v);
+			}
+		  }
 		  const envLines = Object.keys(merged).map(k => `${k}="${merged[k]}"`);
 		  fs.writeFileSync(envPath, envLines.join("\n"), "utf-8");
 		  
@@ -360,6 +376,7 @@
 	const ID_CF_SHAREFILE = "d074e0d9-a8ce-4bf4-a49b-5eab81ee477f";
 	const ID_CF_REASON = "ee1a1e07-a9b6-4209-a7bc-87162005e2f2";
 	const ID_CF_CONTACT_DATE = "63946f1c-7c02-455a-af2d-af7f5f41e3ea";
+	const ID_CF_ZENDESK_TICKET = "3fc1dccf-e684-44f9-84ff-706481a7b4bc";
 
 	// Body parser limits increased for base64 image uploads
 	app.use(express.json({ limit: "50mb" }));
@@ -738,72 +755,64 @@ app.post(["/zendesk/public-reply", "/api/zendesk/public-reply"], async (req, res
 
 // POST /zendesk/close-ticket
 app.post(["/zendesk/close-ticket", "/api/zendesk/close-ticket"], async (req, res) => {
-  const { ticket_id, zapier_token } = req.body;
+  const { ticket_id } = req.body;
   if (!ticket_id) {
     return res.status(400).json({ error: "Campo requerido: ticket_id" });
   }
 
-  const token = zapier_token || process.env.ZAPIER_MCP_TOKEN || "";
-  const zapierUrl = `https://mcp.zapier.com/api/v1/connect?token=${token}`;
-
-  const params = {
-    selected_api: "ZendeskV2CLIAPI",
-    action: "update_ticket_v2",
-    instructions: `Update ticket ${ticket_id}. Set status to 'closed'. Execute immediately.`,
-    params: {
-      id: String(ticket_id),
-      status: "closed"
-    }
-  };
-
   try {
-    const result = await callZapierMcp(zapierUrl, params, "execute_zapier_write_action");
-    return res.json({ status: "ok", message: `Ticket ${ticket_id} cerrado`, response: result });
+    const result = await zendeskFetch(`/tickets/${ticket_id}.json`, {
+      method: "PUT",
+      body: {
+        ticket: {
+          status: "solved"
+        }
+      }
+    });
+    return res.json({ status: "ok", message: `Ticket ${ticket_id} resuelto (solved)`, response: result });
   } catch (e: any) {
-    console.error(`❌ Error: ${e}`);
+    if (e.message && e.message.includes("closed prevents ticket update")) {
+      return res.json({ status: "ok", message: `El ticket ${ticket_id} ya se encuentra cerrado en Zendesk` });
+    }
+    console.error(`❌ Error cerrando ticket: ${e.message}`);
     return res.status(500).json({ error: e.message });
   }
 });
 
 // POST /zendesk/close-with-note
 app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (req, res) => {
-  const { ticket_id, resolution_note, zapier_token } = req.body;
+  const { ticket_id, resolution_note } = req.body;
   if (!ticket_id) {
     return res.status(400).json({ error: "Campo requerido: ticket_id" });
   }
 
-  const token = zapier_token || process.env.ZAPIER_MCP_TOKEN || "";
-  const zapierUrl = `https://mcp.zapier.com/api/v1/connect?token=${token}`;
-  const results: any = {};
-
   try {
-    console.log(`📝 Paso 1/2: Nota interna...`);
+    console.log(`📝 Agregando nota y resolviendo ticket #${ticket_id}...`);
     const noteText = `[RESOLUCION] ${resolution_note || "Ticket resuelto"}`;
-    const noteResult = await addNoteByTicketIdRaw(zapierUrl, String(ticket_id), noteText);
-    results.note_added = "ok";
-
-    console.log(`🔒 Paso 2/2: Cerrando...`);
-    const closeResult = await callZapierMcp(zapierUrl, {
-      selected_api: "ZendeskV2CLIAPI",
-      action: "update_ticket_v2",
-      instructions: `Update ticket ${ticket_id}. Set status to 'closed'. Execute immediately.`,
-      params: {
-        id: String(ticket_id),
-        status: "closed"
+    const closeResult = await zendeskFetch(`/tickets/${ticket_id}.json`, {
+      method: "PUT",
+      body: {
+        ticket: {
+          comment: {
+            body: noteText,
+            public: false
+          },
+          status: "solved"
+        }
       }
-    }, "execute_zapier_write_action");
-    results.ticket_closed = "ok";
+    });
 
     return res.json({
       status: "ok",
-      message: `Ticket ${ticket_id} cerrado con nota`,
-      steps: results,
-      note_response: noteResult.note_result,
-      close_response: closeResult
+      message: `Ticket ${ticket_id} resuelto (solved) con nota`,
+      response: closeResult
     });
   } catch (e: any) {
-    console.error(`❌ Error: ${e}`);
-    return res.status(500).json({ status: "partial", message: e.message, steps: results });
+    if (e.message && e.message.includes("closed prevents ticket update")) {
+      return res.json({ status: "ok", message: `El ticket ${ticket_id} ya se encuentra cerrado en Zendesk` });
+    }
+    console.error(`❌ Error cerrando ticket con nota: ${e.message}`);
+    return res.status(500).json({ error: e.message });
   }
 });
 
@@ -829,57 +838,54 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 // =====================================================
 // VERSIÓN CORREGIDA (de server.ts) - MÁS ESTABLE
 // =====================================================
-	async function searchTicketById(zapierUrl: string, ticketId: string): Promise<any> {
-	  console.log(`🔍 Buscando ticket con ID exacto: ${ticketId}`);
-	  const searchResult = await callZapierMcp(zapierUrl, {
-		selected_api: "ZendeskV2CLIAPI",
-		action: "find_tickets_v2",
-		instructions: `Search for the Zendesk ticket with EXACT numeric ID "${ticketId}". Use search query "id:${ticketId}". Do not perform a general/semantic search or look for this number in the subject or body.`,
-		params: {
-		  search: `id:${ticketId}`,
-		},
-		output: "id, subject, status",
-	  }, "execute_zapier_read_action");
-
-	  if (searchResult && searchResult.warning) {
-		return searchResult;
+	async function searchTicketById(_zapierUrl: string, ticketId: string): Promise<any> {
+	  console.log(`🔍 [Zendesk Direct API] Buscando ticket con ID exacto: ${ticketId}`);
+	  try {
+	    const directRes = await zendeskFetch(`/tickets/${ticketId}.json`);
+	    if (directRes?.ticket) {
+	      return {
+	        results: [directRes.ticket],
+	        id: directRes.ticket.id,
+	        subject: directRes.ticket.subject,
+	        status: directRes.ticket.status
+	      };
+	    }
+	  } catch (err: any) {
+	    console.warn(`[searchTicketById Direct API] ${err.message}`);
 	  }
 
-	  let foundTickets: any[] = [];
-	  if (typeof searchResult === "object" && searchResult !== null) {
-		const results = searchResult.results;
-		if (Array.isArray(results)) {
-		  foundTickets = results;
-		} else if (results && typeof results === "object") {
-		  foundTickets = [results];
-		} else if (Array.isArray(searchResult)) {
-		  foundTickets = searchResult;
-		} else if (searchResult.id) {
-		  foundTickets = [searchResult];
-		}
-	  }
+	  try {
+	    const searchRes = await zendeskFetch(`/search.json?query=type:ticket id:${ticketId}`);
+	    if (searchRes?.results?.[0]) {
+	      const exactTicket = searchRes.results[0];
+	      return {
+	        results: [exactTicket],
+	        id: exactTicket.id,
+	        subject: exactTicket.subject,
+	        status: exactTicket.status
+	      };
+	    }
+	  } catch (e: any) {}
 
-	  const exactTicket = foundTickets.find(
-		(ticket: any) => ticket && String(ticket.id).trim() === String(ticketId).trim()
-	  );
-
-	  if (!exactTicket) {
-		throw new Error(`No se encontró ningún ticket con el ID exacto: ${ticketId}`);
-	  }
-
-	  return {
-		results: [exactTicket],
-		id: exactTicket.id,
-		subject: exactTicket.subject,
-		status: exactTicket.status
-	  };
+	  throw new Error(`No se encontró ningún ticket con el ID exacto: ${ticketId}`);
 	}
 
 	// Helper directo para la API v2 de Zendesk con Token de API
-	async function zendeskFetch(endpointPath: string, options: { method?: string; body?: any } = {}): Promise<any> {
-	  const subdomain = (process.env.ZENDESK_SUBDOMAIN || "vipcosmetics").toLowerCase().trim();
-	  const email = (process.env.ZENDESK_EMAIL || "customerservice@emacaribbean.com").trim();
-	  const token = (process.env.ZENDESK_API_TOKEN || "XylJSJ3enptb5jgbG1JAx5KH0UbutdBpjdUOWTN4").trim();
+	async function zendeskFetch(
+	  endpointPath: string, 
+	  options: { method?: string; body?: any; subdomain?: string; email?: string; token?: string } = {}
+	): Promise<any> {
+	  let subdomain = (options.subdomain || process.env.ZENDESK_SUBDOMAIN || "vipcosmetics").toLowerCase().trim();
+	  if (!subdomain || subdomain === "emacaribbean" || subdomain.includes("emacaribbean") || subdomain === "vipcpsmetics" || subdomain === "vipcosmetic" || subdomain === "vipcpsmetic") {
+	    subdomain = "vipcosmetics";
+	    process.env.ZENDESK_SUBDOMAIN = "vipcosmetics";
+	  }
+	  const email = (options.email || process.env.ZENDESK_EMAIL || process.env.ZENDESK_USER || "").trim();
+	  const token = (options.token || process.env.ZENDESK_API_TOKEN || process.env.ZENDESK_TOKEN || "").trim();
+
+	  if (!email || !token || token === "tu_token_aqui") {
+	    throw new Error("Credenciales directas de Zendesk no configuradas en entorno (ZENDESK_API_TOKEN / ZENDESK_TOKEN o ZENDESK_EMAIL / ZENDESK_USER vacío)");
+	  }
 
 	  const authHeader = `Basic ${Buffer.from(`${email}/token:${token}`).toString("base64")}`;
 	  const url = endpointPath.startsWith("http")
@@ -910,119 +916,55 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	}
 
 	async function addNoteByTicketId(
-	  zapierUrl: string,
+	  _zapierUrl: string,
 	  ticketId: string,
-	  note: string
+	  note: string,
+	  solveTicket: boolean = false,
+	  isPublic: boolean = false
 	): Promise<{ ticket_found: string; note_result: any }> {
 	  const cleanTicketNum = ticketId.trim();
 	  let ticketSubject: string | null = null;
 
-	  // Intentar primero con la API Directa de Zendesk (con Token)
+	  console.log(`🚀 [Zendesk Direct API] Agregando ${isPublic ? "respuesta pública" : "nota interna"} al ticket #${cleanTicketNum}${solveTicket ? " (y cambiando estado a SOLVED)" : ""}...`);
 	  try {
-	    console.log(`🚀 [Zendesk Direct API] Agregando nota interna al ticket #${cleanTicketNum}...`);
-	    try {
-	      const ticketData = await zendeskFetch(`/tickets/${cleanTicketNum}.json`);
-	      if (ticketData?.ticket?.subject) {
-	        ticketSubject = ticketData.ticket.subject;
-	      }
-	    } catch (err: any) {
-	      console.log(`ℹ️ [addNoteByTicketId] Ticket fetch direct note: ${err.message}`);
+	    const ticketData = await zendeskFetch(`/tickets/${cleanTicketNum}.json`);
+	    if (ticketData?.ticket?.subject) {
+	      ticketSubject = ticketData.ticket.subject;
 	    }
+	  } catch (err: any) {
+	    console.log(`ℹ️ [addNoteByTicketId] Ticket fetch direct note: ${err.message}`);
+	  }
 
-	    const noteRes = await zendeskFetch(`/tickets/${cleanTicketNum}.json`, {
-	      method: "PUT",
-	      body: {
-	        ticket: {
-	          comment: {
-	            body: note,
-	            public: false
-	          }
-	        }
-	      }
-	    });
-
-	    if (!ticketSubject && noteRes?.ticket?.subject) {
-	      ticketSubject = noteRes.ticket.subject;
+	  const ticketPayload: any = {
+	    comment: {
+	      body: note,
+	      public: isPublic
 	    }
+	  };
 
-	    console.log(`✅ [Zendesk Direct API] Nota interna agregada exitosamente al ticket #${cleanTicketNum}`);
-	    return {
-	      ticket_found: ticketSubject || cleanTicketNum,
-	      note_result: noteRes
-	    };
-	  } catch (directErr: any) {
-	    console.warn(`⚠️ [Zendesk Direct API Failed] ${directErr.message}. Probando fallback vía Zapier...`);
+	  if (solveTicket) {
+	    ticketPayload.status = "solved";
 	  }
 
-	  const isNumericId = /^\d+$/.test(cleanTicketNum);
-	  const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
-	  const zendeskSub = subdomain.toLowerCase().trim();
-
-	  if (isNumericId) {
-		try {
-		  console.log(`🔍 Buscando ticket con ID numérico: ${cleanTicketNum}`);
-		  
-		  // Usar API cruda para buscar el ticket (NO find_tickets_v2)
-		  const result = await callZapierMcp(zapierUrl, {
-			selected_api: "ZendeskV2CLIAPI",
-			action: "_zap_raw_request",
-			params: {
-			  url: `https://${zendeskSub}.zendesk.com/api/v2/tickets/${cleanTicketNum}.json`,
-			  method: "GET",
-			  fail_on_errors: false
-			}
-		  });
-
-		  if (result?.ticket?.subject) {
-			ticketSubject = result.ticket.subject;
-		  } else if (result?.results?.subject) {
-			ticketSubject = result.results.subject;
-		  } else if (result?.results?.ticket?.subject) {
-			ticketSubject = result.results.ticket.subject;
-		  } else if (result?.subject) {
-			ticketSubject = result.subject;
-		  } else if (result?.raw?.ticket?.subject) {
-			ticketSubject = result.raw.ticket.subject;
-		  }
-		} catch (error: any) {
-		  try {
-			const searchResult = await searchTicketById(zapierUrl, cleanTicketNum);
-			if (searchResult && !searchResult.warning) {
-			  if (searchResult?.results?.[0]?.subject) {
-				ticketSubject = searchResult.results[0].subject;
-			  } else if (searchResult?.subject) {
-				ticketSubject = searchResult.subject;
-			  }
-			}
-		  } catch (e: any) {}
-		}
-	  }
-
-	  if (!ticketSubject) {
-		ticketSubject = cleanTicketNum;
-	  }
-
-	  const noteResult = await callZapierMcp(zapierUrl, {
-		selected_api: "ZendeskV2CLIAPI",
-		action: "ticket_comment",
-		instructions: `Add an INTERNAL note to ticket with ID "${cleanTicketNum}". The note is: "${note}". Execute immediately.`,
-		params: {
-		  id: cleanTicketNum,
-		  ticket: cleanTicketNum,
-		  comment: note,
-		  body: note,
-		  public: "no"
-		},
-		output: "id, status, subject"
+	  const noteRes = await zendeskFetch(`/tickets/${cleanTicketNum}.json`, {
+	    method: "PUT",
+	    body: {
+	      ticket: ticketPayload
+	    }
 	  });
 
+	  if (!ticketSubject && noteRes?.ticket?.subject) {
+	    ticketSubject = noteRes.ticket.subject;
+	  }
+
+	  console.log(`✅ [Zendesk Direct API] ${isPublic ? "Respuesta pública" : "Nota interna"} agregada exitosamente al ticket #${cleanTicketNum}${solveTicket ? " (Estado de Zendesk cambiado a SOLVED)" : ""}`);
 	  return {
-		ticket_found: ticketSubject,
-		note_result: noteResult,
+	    ticket_found: ticketSubject || cleanTicketNum,
+	    note_result: noteRes
 	  };
 	}
 
-	async function searchTicketByIdRaw(zapierUrl: string, ticketId: string): Promise<any> {
+	async function searchTicketByIdRaw(_zapierUrl: string, ticketId: string): Promise<any> {
 	  try {
 	    console.log(`🔍 [Zendesk Direct API] Obteniendo ticket #${ticketId}...`);
 	    const directRes = await zendeskFetch(`/tickets/${ticketId}.json`);
@@ -1036,44 +978,10 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	    if (searchRes?.results?.[0]) return searchRes.results[0];
 	  } catch (e: any) {}
 
-	  const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
-	  const zendeskSub = subdomain.toLowerCase().trim();
-	  const zendeskApiBase = `https://${zendeskSub}.zendesk.com`;
-	  const ticketUrl = `${zendeskApiBase}/api/v2/tickets/${ticketId}.json`;
-	  try {
-		const result = await callZapierMcp(zapierUrl, {
-		  selected_api: "ZendeskV2CLIAPI",
-		  action: "_zap_raw_request",
-		  params: {
-			url: ticketUrl,
-			method: "GET"
-		  }
-		});
-
-		if (result && typeof result === "object") {
-		  if (result.ticket && typeof result.ticket === "object" && "id" in result.ticket) {
-			return result.ticket;
-		  }
-		  const results = result.results;
-		  if (results && typeof results === "object" && "id" in results) {
-			return results;
-		  }
-		  if (results && typeof results === "object" && results.ticket && "id" in results.ticket) {
-			return results.ticket;
-		  }
-		  if (result.raw && typeof result.raw === "object" && result.raw.ticket) {
-			return result.raw.ticket;
-		  }
-		  if ("id" in result && "subject" in result) {
-			return result;
-		  }
-		}
-	  } catch (e: any) {}
-
 	  return null;
 	}
 
-	async function getMacroById(zapierUrl: string, macroId: string): Promise<any> {
+	async function getMacroById(_zapierUrl: string, macroId: string): Promise<any> {
 	  try {
 	    console.log(`🔍 [Zendesk Direct API] Obteniendo macro #${macroId}...`);
 	    const directRes = await zendeskFetch(`/macros/${macroId}.json`);
@@ -1081,31 +989,10 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  } catch (directErr: any) {
 	    console.warn(`[getMacroById Direct API] ${directErr.message}`);
 	  }
-
-	  const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
-	  const zendeskSub = subdomain.toLowerCase().trim();
-	  const zendeskApiBase = `https://${zendeskSub}.zendesk.com`;
-	  const macroUrl = `${zendeskApiBase}/api/v2/macros/${macroId}.json`;
-	  try {
-		const result = await callZapierMcp(zapierUrl, {
-		  selected_api: "ZendeskV2CLIAPI",
-		  action: "_zap_raw_request",
-		  params: {
-			url: macroUrl,
-			method: "GET"
-		  }
-		});
-
-		if (result && typeof result === "object") {
-		  return result.macro || result.results?.macro || {};
-		}
-		return {};
-	  } catch (e: any) {
-		return {};
-	  }
+	  return {};
 	}
 
-	async function getTicketComments(zapierUrl: string, ticketId: string): Promise<any[]> {
+	async function getTicketComments(_zapierUrl: string, ticketId: string): Promise<any[]> {
 	  try {
 	    console.log(`💬 [Zendesk Direct API] Obteniendo comentarios del ticket #${ticketId}...`);
 	    const directRes = await zendeskFetch(`/tickets/${ticketId}/comments.json`);
@@ -1113,28 +1000,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  } catch (directErr: any) {
 	    console.warn(`[getTicketComments Direct API] ${directErr.message}`);
 	  }
-
-	  const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
-	  const zendeskSub = subdomain.toLowerCase().trim();
-	  const zendeskApiBase = `https://${zendeskSub}.zendesk.com`;
-	  const commentsUrl = `${zendeskApiBase}/api/v2/tickets/${ticketId}/comments.json`;
-	  try {
-		const result = await callZapierMcp(zapierUrl, {
-		  selected_api: "ZendeskV2CLIAPI",
-		  action: "_zap_raw_request",
-		  params: {
-			url: commentsUrl,
-			method: "GET"
-		  }
-		});
-
-		if (result && typeof result === "object") {
-		  return result.comments || result.results?.comments || [];
-		}
-		return Array.isArray(result) ? result : [];
-	  } catch (e: any) {
-		return [];
-	  }
+	  return [];
 	}
 
 	async function getLatestComment(zapierUrl: string, ticketId: string): Promise<any> {
@@ -1149,16 +1015,14 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  return null;
 	}
 
-// =====================================================
-	// VERSIÓN CORREGIDA - DELEGA A addNoteByTicketId
-	// =====================================================
 	async function addNoteByTicketIdRaw(
 	  zapierUrl: string,
 	  ticketId: string,
-	  note: string
+	  note: string,
+	  solveTicket: boolean = false,
+	  isPublic: boolean = false
 	): Promise<{ ticket_found: string; note_result: any }> {
-	  console.log(`🚀 [addNoteByTicketIdRaw] Delegating to addNoteByTicketId for ticketId: ${ticketId}`);
-	  return addNoteByTicketId(zapierUrl, ticketId, note);
+	  return addNoteByTicketId(zapierUrl, ticketId, note, solveTicket, isPublic);
 	}
 
 	// Helpers
@@ -1264,9 +1128,54 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		} catch (e) {
 		  data = {};
 		}
-		data[taskId] = ticketId;
-		await fsp.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
-		await supabaseUpsert("zendesk_tickets", data);
+		const cleanTicketId = (ticketId || "").trim();
+		if (cleanTicketId) {
+		  data[taskId] = cleanTicketId;
+		  await fsp.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+		  await supabaseUpsert("zendesk_tickets", data);
+
+		  // Synchronize ClickUp Custom Field "Zendesk Ticket" (3fc1dccf-e684-44f9-84ff-706481a7b4bc)
+		  if (taskId && CLICKUP_API_KEY) {
+			try {
+			  const subdomain = (process.env.ZENDESK_SUBDOMAIN || "vipcosmetics").toLowerCase().trim();
+			  let valueToSend = cleanTicketId;
+			  if (!cleanTicketId.startsWith("http://") && !cleanTicketId.startsWith("https://") && /^\d+$/.test(cleanTicketId)) {
+				valueToSend = `https://${subdomain}.zendesk.com/agent/tickets/${cleanTicketId}`;
+			  }
+
+			  const cfUrl = `https://api.clickup.com/api/v2/task/${taskId}/field/${ID_CF_ZENDESK_TICKET}`;
+			  const cfRes = await fetch(cfUrl, {
+				method: "POST",
+				headers: {
+				  "Authorization": CLICKUP_API_KEY,
+				  "Content-Type": "application/json"
+				},
+				body: JSON.stringify({ value: valueToSend })
+			  });
+
+			  if (!cfRes.ok) {
+				// Fallback: try raw cleanTicketId if the field expects raw string/number
+				const rawCfRes = await fetch(cfUrl, {
+				  method: "POST",
+				  headers: {
+					"Authorization": CLICKUP_API_KEY,
+					"Content-Type": "application/json"
+				  },
+				  body: JSON.stringify({ value: cleanTicketId })
+				});
+				if (rawCfRes.ok) {
+				  console.log(`✅ [ClickUp Custom Field] Updated Zendesk Ticket field (${ID_CF_ZENDESK_TICKET}) for task ${taskId} with raw ID: ${cleanTicketId}`);
+				} else {
+				  console.error(`⚠️ [ClickUp Custom Field Error] Failed updating Zendesk Ticket field (${ID_CF_ZENDESK_TICKET}) for task ${taskId}: Status ${rawCfRes.status}`);
+				}
+			  } else {
+				console.log(`✅ [ClickUp Custom Field] Updated Zendesk Ticket field (${ID_CF_ZENDESK_TICKET}) for task ${taskId} with: ${valueToSend}`);
+			  }
+			} catch (clickupErr: any) {
+			  console.error("Error updating ClickUp Zendesk Ticket custom field:", clickupErr.message);
+			}
+		  }
+		}
 	  } catch (e: any) {
 		console.warn("Warning writing zendesk tickets:", e.message);
 	  }
@@ -1282,7 +1191,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  }
 	}
 
-	async function findUserByEmail(zapierUrl: string, email: string): Promise<any> {
+	async function findUserByEmail(_zapierUrl: string, email: string): Promise<any> {
 	  try {
 	    console.log(`🔍 [Zendesk Direct API] Buscar usuario por email: ${email}`);
 	    const directData = await zendeskFetch(`/users/search.json?query=email:${encodeURIComponent(email)}`);
@@ -1293,101 +1202,22 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  } catch (directErr: any) {
 	    console.warn(`[findUserByEmail Direct API]: ${directErr.message}`);
 	  }
-
-	  const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
-	  const zendeskSub = subdomain.toLowerCase().trim();
-	  const searchUrl = `https://${zendeskSub}.zendesk.com/api/v2/users/search.json?query=email:${email}`;
-
-	  try {
-		const rawResult = await callZapierMcp(zapierUrl, {
-		  selected_api: "ZendeskV2CLIAPI",
-		  action: "_zap_raw_request",
-		  instructions: `Make a GET request to search user by email. URL is "${searchUrl}".`,
-		  params: {
-			url: searchUrl,
-			method: "GET",
-			headers: {
-			  "Content-Type": "application/json"
-			}
-		  },
-		  output: "users"
-		}, "execute_zapier_read_action");
-
-		if (rawResult && rawResult.users && rawResult.users.length > 0) {
-		  return rawResult.users[0];
-		}
-		if (rawResult && Array.isArray(rawResult) && rawResult.length > 0) {
-		  return rawResult[0];
-		}
-	  } catch (err: any) {}
-
 	  return null;
 	}
 
-	async function findTicketByInvoice(zapierUrl: string, invoice: string): Promise<any> {
-	  console.log(`🔍 Buscando ticket existente por Invoice en Zendesk (con raw request primero): ${invoice}`);
-	  const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
-	  const zendeskSub = subdomain.toLowerCase().trim();
-	  const searchUrl = `https://${zendeskSub}.zendesk.com/api/v2/search.json?query=type:ticket "Caso Invoice: ${invoice}"`;
-
+	async function findTicketByInvoice(_zapierUrl: string, invoice: string): Promise<any> {
+	  console.log(`🔍 Buscando ticket existente por Invoice en Zendesk Direct API: ${invoice}`);
 	  try {
-		const rawResult = await callZapierMcp(zapierUrl, {
-		  selected_api: "ZendeskV2CLIAPI",
-		  action: "_zap_raw_request",
-		  instructions: `Make a GET request to search ticket by invoice query. URL is "${searchUrl}".`,
-		  params: {
-			url: searchUrl,
-			method: "GET"
-		  },
-		  output: "results"
-		}, "execute_zapier_read_action");
-
-		if (rawResult && typeof rawResult === "object") {
-		  const results = rawResult.results || rawResult;
-		  if (Array.isArray(results)) {
-			const match = results.find((t: any) => t && t.subject && t.subject.includes(invoice));
-			if (match) {
-			  console.log(`✅ [Raw Search] Encontrado ticket existente de Zendesk para Invoice ${invoice}: ID ${match.id}`);
-			  return match;
-			}
-		  }
-		}
+	    const searchRes = await zendeskFetch(`/search.json?query=type:ticket "${encodeURIComponent(invoice)}"`);
+	    if (searchRes?.results && Array.isArray(searchRes.results)) {
+	      const match = searchRes.results.find((t: any) => t && t.subject && t.subject.includes(invoice));
+	      if (match) {
+	        console.log(`✅ [Direct Search] Encontrado ticket existente de Zendesk para Invoice ${invoice}: ID ${match.id}`);
+	        return match;
+	      }
+	    }
 	  } catch (err: any) {
-		console.log(`[findTicketByInvoice] raw search failed: ${err.message}. Trying standard search...`);
-	  }
-
-	  try {
-		const searchResult = await callZapierMcp(zapierUrl, {
-		  selected_api: "ZendeskV2CLIAPI",
-		  action: "find_tickets_v2",
-		  instructions: `Search for Zendesk tickets containing "Caso Invoice: ${invoice}" in the subject.`,
-		  params: {
-			search: `type:ticket "Caso Invoice: ${invoice}"`
-		  },
-		  output: "id, subject, status"
-		}, "execute_zapier_read_action");
-		
-		let foundTickets: any[] = [];
-		if (searchResult && typeof searchResult === "object") {
-		  const results = searchResult.results;
-		  if (Array.isArray(results)) {
-			foundTickets = results;
-		  } else if (results && typeof results === "object") {
-			foundTickets = [results];
-		  } else if (Array.isArray(searchResult)) {
-			foundTickets = searchResult;
-		  } else if (searchResult.id) {
-			foundTickets = [searchResult];
-		  }
-		}
-
-		const match = foundTickets.find((t: any) => t && t.subject && t.subject.includes(invoice));
-		if (match) {
-		  console.log(`✅ Encontrado ticket existente de Zendesk para Invoice ${invoice}: ID ${match.id}`);
-		  return match;
-		}
-	  } catch (err: any) {
-		console.warn("[findTicketByInvoice] standard search also failed:", err.message);
+	    console.warn("[findTicketByInvoice Direct API]:", err.message);
 	  }
 	  return null;
 	}
@@ -1515,8 +1345,8 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  messages.push({ role: "user", content: prompt });
 
 	  const groqModels = [
-		"llama-3.3-70b-versatile",
 		"llama-3.1-8b-instant",
+		"llama-3.3-70b-versatile",
 		"mixtral-8x7b-32768"
 	  ];
 
@@ -1557,7 +1387,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  console.error(`❌ [callGroq] All Groq models failed or rate-limited. Trying Gemini fallback...`);
 	  try {
 		if (process.env.GEMINI_API_KEY) {
-		  console.log(`🤖 [callGroq] Falling back to Gemini gemini-3.5-flash...`);
+		  console.log(`🤖 [callGroq] Falling back to Gemini gemini-2.5-flash...`);
 		  const { GoogleGenAI } = await import("@google/genai");
 		  const ai = new GoogleGenAI({
 			apiKey: process.env.GEMINI_API_KEY,
@@ -1569,7 +1399,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		  });
 
 		  const response = await ai.models.generateContent({
-			model: "gemini-3.5-flash",
+			model: "gemini-2.5-flash",
 			contents: prompt,
 			config: {
 			  systemInstruction: systemMessage,
@@ -1742,13 +1572,159 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  return [null, null, null];
 	}
 
+	function detectIsGift(text: string): boolean {
+	  if (!text) return false;
+	  const normalize = (str: string) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+	  const t = normalize(text);
+
+	  const triggers = [
+		"acepto regalo", "acepta regalo", "acepto el regalo", 
+		"accepted gift", "accepts gift", "accepted the gift", 
+		"de acuerdo en recibir los productos", "de acuerdo con recibir los productos",
+		"agreed to receive the products", "recibir los productos en compensacion",
+		"productos en compensacion", "productos como compensacion", 
+		"products as compensation", "regalo de compensacion",
+		"compensation options", "compensation option", "pre-approved compensation",
+		"pre approved compensation", "opciones de compensacion", "opcion de compensacion",
+		"paint relave stick", "relave stick", "paint stick", "paint relave",
+		"offered a gift", "offered compensation", "offered as compensation",
+		"accepted satisfactorily", "acepto la compensacion", "aceptaron la compensacion",
+		"ofrecimos compensacion", "ofrecio compensacion", "ofrecimos un regalo", "ofrecio un regalo",
+		"offered a paint", "offered a paint relave", "which they accepted",
+		"la clienta ha aceptado", "la clienta acepto", "la clienta acepta",
+		"el cliente ha aceptado", "el cliente acepto", "el cliente acepta",
+		"cliente acepto", "cliente ha aceptado", "cliente acepta",
+		"la clienta acepto la resolucion", "cliente acepto la resolucion",
+		"acepto la resolucion", "acepta la resolucion", "ha aceptado la resolucion",
+		"the client accepted", "client accepted", "customer accepted", "the customer accepted",
+		"client has accepted", "customer has accepted", "accepted the resolution",
+		"accepts the resolution", "has accepted the resolution", "accepted resolution",
+		"accepts resolution", "she accepted", "he accepted", "she has accepted", "he has accepted"
+	  ];
+
+	  const matched = triggers.find(trig => t.includes(normalize(trig)));
+	  if (!matched) return false;
+
+	  const matchIdx = t.indexOf(normalize(matched));
+	  const prefijo = t.substring(Math.max(0, matchIdx - 20), matchIdx);
+	  if (["no ", "not ", "n't ", "sin "].some(neg => prefijo.includes(neg))) {
+		return false;
+	  }
+
+	  return true;
+	}
+
+	function detectIsDeadline(text: string): boolean {
+	  if (!text) return false;
+	  const normalize = (str: string) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+	  const t = normalize(text);
+	  const triggers = [
+		"deadline",
+		"assign a deadline",
+		"assigning a deadline",
+		"assigned a deadline",
+		"will assign a deadline",
+		"plazo limite",
+		"fecha limite",
+		"send a deadline",
+		"sending a deadline",
+		"envio de deadline",
+		"enviar deadline",
+		"estatus a deadline"
+	  ];
+	  return triggers.some(trig => t.includes(normalize(trig)));
+	}
+
+	function determineResolution(reason: string = "", text: string = ""): string | null {
+	  const normReason = (reason || "").toLowerCase().trim();
+	  const normText = (text || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+	  // Exact ClickUp Dropdown Option UUIDs for Custom Field 55638270-b614-4783-ad1c-0bd994d6484b (RESOLUTION)
+	  const ID_RES_REFUND = "e9367f41-cb3b-42f0-b612-6528d02098dc";
+	  const ID_RES_GIFT = "94dad466-99f5-4f62-b6a1-f7d0a567ffae";
+	  const ID_RES_DISPUTE = "a148c4e2-b2f3-4b6d-9cf6-6eb8255c6099";
+	  const ID_RES_LOST_LEAD = "49bb94ed-70b8-4d8f-80ae-8b4f8ab9b04e";
+	  const ID_RES_P_AND_R = "cdc84079-b6a3-4665-9161-97d8d7bac5eb";
+	  const ID_RES_RESOLVED = "550d1479-412d-45f9-b7da-64cd69473af1";
+
+	  // 1. Direct Text Triggers in comment/notes
+	  if (normText.includes("disputa") || normText.includes("dispute") || normText.includes("chargeback") || normText.includes("contracargo")) {
+	    return ID_RES_DISPUTE;
+	  }
+	  if (normText.includes("reembolso") || normText.includes("refund") || normText.includes("devolucion de dinero") || normText.includes("money back")) {
+	    return ID_RES_REFUND;
+	  }
+	  if (detectIsGift(normText) || normText.includes("regalo") || normText.includes("gift") || normText.includes("compensacion") || normText.includes("enviar regalo") || normText.includes("envio de regalo")) {
+	    return ID_RES_GIFT;
+	  }
+	  if (normText.includes("lost lead") || normText.includes("cliente perdido") || normText.includes("no le interesa") || normText.includes("no interesado")) {
+	    return ID_RES_LOST_LEAD;
+	  }
+	  if (normText.includes("p+r") || normText.includes("p & r")) {
+	    return ID_RES_P_AND_R;
+	  }
+	  if (normText.includes("instrucciones enviadas") || normText.includes("caso resuelto") || normText.includes("duda aclarada") || normText.includes("resolved") || normText.includes("solucionado")) {
+	    return ID_RES_RESOLVED;
+	  }
+
+	  // 2. Reason Correlation Matrix based on actual case statistics:
+	  // - GIFT (44 tasks): deffective (20), gbk (7), regret (5), missing product (3), no results (2), sales person misinformed (2), instructions, taxes, wrong product, first sale refund, reaction
+	  if (["deffective", "defective", "missing product", "wrong product", "taxes", "first sale refund"].includes(normReason)) {
+	    return ID_RES_GIFT;
+	  }
+
+	  // - RESOLVED (14 tasks): instructions (8), shalem (3), regret (2), shippings (1)
+	  if (["instructions", "shippings", "shipping", "shalem"].includes(normReason)) {
+	    return ID_RES_RESOLVED;
+	  }
+
+	  // - Overlapping/Ambiguous reasons: gbk, regret, reaction, no results, sales person misinformed
+	  if (["gbk", "regret", "reaction", "no results", "sales person misinformed"].includes(normReason)) {
+	    if (normText.includes("reembolso") || normText.includes("refund")) {
+	      return ID_RES_REFUND;
+	    }
+	    if (normText.includes("disputa") || normText.includes("dispute")) {
+	      return ID_RES_DISPUTE;
+	    }
+	    if (normText.includes("lost lead") || normText.includes("no le interesa")) {
+	      return ID_RES_LOST_LEAD;
+	    }
+	    if (normText.includes("p+r")) {
+	      return ID_RES_P_AND_R;
+	    }
+	    if (normText.includes("solucion") || normText.includes("resolv") || normText.includes("instruccion")) {
+	      return ID_RES_RESOLVED;
+	    }
+	    // GIFT is the predominant resolution (44 cases vs 7 refund, 2 lost lead, 1 dispute, 1 p+r)
+	    return ID_RES_GIFT;
+	  }
+
+	  return null;
+	}
+
 	async function analyzeStatusTrigger(text: string): Promise<string> {
+	  if (detectIsDeadline(text)) {
+		return "deadline";
+	  }
 	  const textLower = text.toLowerCase();
 	  if (textLower.includes("disputa") || textLower.includes("dispute") || textLower.includes("chargeback")) {
 		return "dispute";
 	  }
-	  if (["waiting for a tn", "waiting for a tracking", "waiting for tracking", "esperando guía", "esperando tracking", "tn pending"].some(frase => textLower.includes(frase))) {
+	  if ([
+		"waiting for a tn", "waiting for a tracking", "waiting for tracking", "esperando guía", "esperando tracking", "tn pending",
+		"pending review", "is currently pending review", "currently pending review", "under review",
+		"pendiente de revision", "pendiente de revisión", "en revision", "en revisión", "esperando revision", "esperando revisión"
+	  ].some(frase => textLower.includes(frase))) {
 		return "internal waiting";
+	  }
+
+	  if ([
+		"tracking number", "tracking numbers", "tracking link", "in transit", "currently in transit", "active tracking", "fedex shipment", "shipment is scheduled",
+		"provided her with tracking", "provided her with active tracking", "provided with tracking", "provided tracking",
+		"numero de guia", "numeros de guia", "guia de rastreo", "guia:", "tracking:", "fedex tracking", "usps tracking", "ups tracking",
+		"tracking number provided", "tracking numbers provided", "en transito", "en tránsito", "link de rastreo", "link de tracking"
+	  ].some(frase => textLower.includes(frase)) && !textLower.includes("waiting for tracking") && !textLower.includes("waiting for a tn") && !textLower.includes("esperando guía")) {
+		return "shipment follow up";
 	  }
 
 	  try {
@@ -1767,7 +1743,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	4. Si hay disputa ("dispute", "chargeback") -> dispute
 	5. Si hay tracking, número de guía (tracking number / TN) o el paquete YA va en camino o ya se envió -> shipment follow up.
 	   🚨 REGLA CRÍTICA DE EXCLUSIÓN: Comentarios que digan que se enviará un reemplazo ("we will send a replacement", "se enviará un reemplazo") o que se enviarán productos ("we will send the Hidra Silk Serum"), pero que aún NO tengan número de guía (tracking number / TN) física ni hayan sido enviados físicamente, NO deben ir a "shipment follow up" (shipping). Estos comentarios de resolución o intención de envío corresponden a "internal waiting" o "cs reply".
-	6. Si hay espera interna, autorización, o se menciona "waiting for a TN", o se está gestionando/ofreciendo enviar un reemplazo o producto pero aún no hay tracking -> internal waiting. 🚨 EXCEPCIÓN CRÍTICA: Si el comentario describe un intento de contacto (ej. "attempted to contact", "intentamos contactar"), haber dejado un mensaje (ej. "leave a message", "left a message", "dejó mensaje"), o estar esperando que la cliente elija o decida algo (ej. "product selection", "waiting for her to choose", "esperando que responda/seleccione"), esto NO es una espera interna de la empresa, sino que estamos esperando al cliente. Por lo tanto, debe clasificarse estrictamente como "cs reply" y NUNCA como "internal waiting".
+	6. Si hay espera interna, revisión o autorización ("pending review", "is currently pending review", "pendiente de revisión", "waiting for a TN"), o se está gestionando/ofreciendo enviar un reemplazo o producto pero aún no hay tracking -> internal waiting. 🚨 EXCEPCIÓN CRÍTICA: Si el comentario describe un intento de contacto (ej. "attempted to contact", "intentamos contactar"), haber dejado un mensaje (ej. "leave a message", "left a message", "dejó mensaje"), o estar esperando que la cliente elija o decida algo (ej. "product selection", "waiting for her to choose", "esperando que responda/seleccione"), esto NO es una espera interna de la empresa, sino que estamos esperando al cliente. Por lo tanto, debe clasificarse strictly como "cs reply" y NUNCA como "internal waiting".
 	7. Si recibió paquete -> cs reply
 	8. Si el agente indica que se procede a cerrar el caso, o que la tarea/ticket se cerrará o está cerrada -> closed
 	9. Si el comentario describe un monólogo del agente, un intento de llamada/contacto fallido, o estar esperando que el cliente responda, actúe o elija un producto de compensación (ej. "regarding the product selection for compensation"), el estatus debe ser "cs reply". JAMÁS debe ser "internal waiting".
@@ -1780,7 +1756,23 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		
 		// Post-process correction to enforce the user's rule programmatically
 		const isWillSendOrAddressing = (textLower.includes("will send") || textLower.includes("enviara") || textLower.includes("se le enviara") || textLower.includes("addressing the issue") || textLower.includes("mandar un reemplazo") || textLower.includes("send a replacement") || textLower.includes("enviar un reemplazo"));
-		const hasTrackingNumberOrGuia = (textLower.includes("tracking number") || textLower.includes("numero de guia") || textLower.includes("guia:") || textLower.includes("tracking:") || textLower.includes("fedex:") || textLower.includes("usps:") || textLower.includes("ups:"));
+		const hasTrackingNumberOrGuia = (
+		  textLower.includes("tracking number") ||
+		  textLower.includes("tracking numbers") ||
+		  textLower.includes("tracking link") ||
+		  textLower.includes("in transit") ||
+		  textLower.includes("active tracking") ||
+		  textLower.includes("fedex shipment") ||
+		  textLower.includes("shipment is scheduled") ||
+		  textLower.includes("numero de guia") ||
+		  textLower.includes("numeros de guia") ||
+		  textLower.includes("guia de rastreo") ||
+		  textLower.includes("guia:") ||
+		  textLower.includes("tracking:") ||
+		  textLower.includes("fedex") ||
+		  textLower.includes("usps") ||
+		  textLower.includes("ups")
+		);
 		
 		if (status === "shipment follow up" && isWillSendOrAddressing && !hasTrackingNumberOrGuia) {
 		  console.log(`⚠️ Corrección manual de estatus: Comentario con intención de envío sin guía real. Forzando 'internal waiting' en vez de 'shipment follow up'.`);
@@ -2356,6 +2348,324 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  }
 	});
 
+	// Zendesk Credentials Management & Connection Testing Endpoints
+	app.get("/api/zendesk/config", async (req, res) => {
+	  try {
+	    const subdomain = (process.env.ZENDESK_SUBDOMAIN || "vipcosmetics").trim();
+	    const email = (process.env.ZENDESK_EMAIL || "").trim();
+	    const token = (process.env.ZENDESK_API_TOKEN || "").trim();
+	    const hasToken = !!(token && token !== "tu_token_aqui");
+	    
+	    const maskedToken = hasToken
+	      ? (token.length > 8 ? token.substring(0, 4) + "••••" + token.slice(-4) : "••••••••")
+	      : "";
+
+	    res.json({
+	      success: true,
+	      subdomain,
+	      email,
+	      hasToken,
+	      maskedToken,
+	      isConfigured: !!(subdomain && email && hasToken)
+	    });
+	  } catch (err: any) {
+	    res.status(500).json({ success: false, error: err.message });
+	  }
+	});
+
+	app.post("/api/zendesk/config", async (req, res) => {
+	  try {
+	    const { subdomain, email, token } = req.body || {};
+
+	    if (subdomain !== undefined) process.env.ZENDESK_SUBDOMAIN = subdomain.trim();
+	    if (email !== undefined) process.env.ZENDESK_EMAIL = email.trim();
+	    if (token !== undefined && token.trim() !== "") process.env.ZENDESK_API_TOKEN = token.trim();
+
+	    const envPath = path.join(process.cwd(), ".env");
+	    const envExamplePath = path.join(process.cwd(), ".env.example");
+	    
+	    const updateFileEnv = async (filePath: string) => {
+	      let lines: string[] = [];
+	      if (fs.existsSync(filePath)) {
+	        const content = await fsp.readFile(filePath, "utf-8");
+	        lines = content.split("\n");
+	      }
+	      const setVar = (key: string, val: string) => {
+	        const idx = lines.findIndex(l => l.trim().startsWith(`${key}=`));
+	        if (idx !== -1) {
+	          lines[idx] = `${key}="${val}"`;
+	        } else {
+	          lines.push(`${key}="${val}"`);
+	        }
+	      };
+	      if (process.env.ZENDESK_SUBDOMAIN) setVar("ZENDESK_SUBDOMAIN", process.env.ZENDESK_SUBDOMAIN);
+	      if (process.env.ZENDESK_EMAIL) setVar("ZENDESK_EMAIL", process.env.ZENDESK_EMAIL);
+	      if (process.env.ZENDESK_API_TOKEN) setVar("ZENDESK_API_TOKEN", process.env.ZENDESK_API_TOKEN);
+	      await fsp.writeFile(filePath, lines.join("\n"), "utf-8");
+	    };
+
+	    await updateFileEnv(envPath);
+	    await updateFileEnv(envExamplePath);
+	    await backupEnvToSupabase();
+
+	    res.json({
+	      success: true,
+	      message: "Configuración de Zendesk guardada con éxito.",
+	      subdomain: process.env.ZENDESK_SUBDOMAIN,
+	      email: process.env.ZENDESK_EMAIL,
+	      hasToken: !!process.env.ZENDESK_API_TOKEN
+	    });
+	  } catch (err: any) {
+	    res.status(500).json({ success: false, error: err.message });
+	  }
+	});
+
+	app.post("/api/zendesk/test-connection", async (req, res) => {
+	  try {
+	    const { subdomain, email, token } = req.body || {};
+
+	    const targetSubdomain = (subdomain || process.env.ZENDESK_SUBDOMAIN || "vipcosmetics").toLowerCase().trim();
+	    const targetEmail = (email || process.env.ZENDESK_EMAIL || "").trim();
+	    const targetToken = (token || process.env.ZENDESK_API_TOKEN || "").trim();
+
+	    if (!targetSubdomain) {
+	      return res.status(400).json({
+	        success: false,
+	        error: "Falta el subdominio de Zendesk (ej. vipcosmetics). Por favor, ingrésalo."
+	      });
+	    }
+
+	    if (!targetEmail) {
+	      return res.status(400).json({
+	        success: false,
+	        error: "Falta el correo electrónico de Zendesk (ej. agente@empresa.com). Por favor, ingrésalo."
+	      });
+	    }
+
+	    if (!targetToken || targetToken === "tu_token_aqui") {
+	      return res.status(400).json({
+	        success: false,
+	        error: "Falta el API Token de Zendesk. Por favor, ingresa tu token activo."
+	      });
+	    }
+
+	    // Ejecutar verificación real contra la API de Zendesk v2
+	    try {
+	      const meData = await zendeskFetch("/users/me.json", {
+	        subdomain: targetSubdomain,
+	        email: targetEmail,
+	        token: targetToken
+	      });
+
+	      const user = meData.user;
+	      return res.json({
+	        success: true,
+	        message: `¡Conexión a Zendesk API Exitosa! Credenciales autenticadas correctamente para ${user?.name || user?.email || targetEmail} (${user?.role || 'Agente'}) en https://${targetSubdomain}.zendesk.com.`,
+	        subdomain: targetSubdomain,
+	        email: targetEmail,
+	        user: {
+	          id: user?.id,
+	          name: user?.name,
+	          email: user?.email,
+	          role: user?.role
+	        }
+	      });
+	    } catch (directErr: any) {
+	      // Verificación secundaria vía /tickets.json por si me.json tiene permisos restringidos
+	      try {
+	        const ticketsData = await zendeskFetch("/tickets.json?per_page=1", {
+	          subdomain: targetSubdomain,
+	          email: targetEmail,
+	          token: targetToken
+	        });
+	        return res.json({
+	          success: true,
+	          message: `¡Conexión a Zendesk API Exitosa! Subdominio "${targetSubdomain}" verificado con éxito.`,
+	          subdomain: targetSubdomain,
+	          email: targetEmail,
+	          ticketCount: ticketsData.count || ticketsData.tickets?.length || 0
+	        });
+	      } catch (fallbackErr: any) {
+	        const rawError = directErr.message || fallbackErr.message || "Error al autenticar con Zendesk";
+	        
+	        let userTip = "Verifica que el Correo sea un usuario activo de Zendesk con rol de Agente/Admin y que el API Token haya sido generado en Zendesk Admin Center > Admin API > API Tokens.";
+	        if (rawError.includes("401")) {
+	          userTip = "Error 401 (No Autorizado): Zendesk rechazó las credenciales. Confirma que el token sea correcto y que el correo coincida con el usuario creador del token.";
+	        } else if (rawError.includes("404")) {
+	          userTip = `Error 404: No se encontró el subdominio https://${targetSubdomain}.zendesk.com. Confirma el nombre del subdominio.`;
+	        }
+
+	        return res.status(401).json({
+	          success: false,
+	          error: rawError,
+	          details: userTip,
+	          subdomain: targetSubdomain,
+	          email: targetEmail
+	        });
+	      }
+	    }
+	  } catch (err: any) {
+	    return res.status(500).json({
+	      success: false,
+	      error: `Error interno al realizar la prueba de conexión: ${err.message}`
+	    });
+	  }
+	});
+
+	// Endpoint para verificar si un usuario existe en Zendesk (por email, teléfono, nombre o query)
+	app.all(["/api/zendesk/check-user", "/zendesk/check-user"], async (req, res) => {
+	  try {
+	    const params = req.method === "GET" ? req.query : req.body;
+	    const { email, phone, name, query, external_id } = params || {};
+	    const subdomain = (process.env.ZENDESK_SUBDOMAIN || "vipcosmetics").toLowerCase().trim();
+
+	    const cleanEmail = (email || "").toString().trim();
+	    const cleanPhone = (phone || "").toString().trim();
+	    const cleanName = (name || "").toString().trim();
+	    const cleanQuery = (query || "").toString().trim();
+	    const cleanExtId = (external_id || "").toString().trim();
+
+	    if (!cleanEmail && !cleanPhone && !cleanName && !cleanQuery && !cleanExtId) {
+	      return res.status(400).json({
+	        success: false,
+	        exists: false,
+	        error: "Debes proporcionar al menos un criterio de búsqueda (email, teléfono, nombre o término de búsqueda)."
+	      });
+	    }
+
+	    let primaryQuery = "";
+	    if (cleanEmail) {
+	      primaryQuery = `type:user email:"${cleanEmail}"`;
+	    } else if (cleanPhone) {
+	      const digitsOnly = cleanPhone.replace(/[^\d+]/g, "");
+	      primaryQuery = `type:user phone:"${digitsOnly}"`;
+	    } else if (cleanExtId) {
+	      primaryQuery = `type:user external_id:"${cleanExtId}"`;
+	    } else if (cleanName) {
+	      primaryQuery = `type:user name:"${cleanName}"`;
+	    } else {
+	      primaryQuery = `type:user ${cleanQuery}`;
+	    }
+
+	    console.log(`🔍 [Zendesk Check User] Buscando en Zendesk: "${primaryQuery}"`);
+
+	    let rawUsers: any[] = [];
+	    let isConfigured = true;
+
+	    try {
+	      // Búsqueda en API de usuarios de Zendesk
+	      const searchRes = await zendeskFetch(`/users/search.json?query=${encodeURIComponent(primaryQuery)}`);
+	      if (Array.isArray(searchRes?.users)) {
+	        rawUsers = searchRes.users;
+	      } else if (Array.isArray(searchRes?.results)) {
+	        rawUsers = searchRes.results;
+	      }
+
+	      // Si la búsqueda inicial por campo no devolvió nada, probar una búsqueda general amplia
+	      if (rawUsers.length === 0) {
+	        const fallbackTerm = cleanEmail || cleanPhone.replace(/[^\d]/g, "") || cleanName || cleanQuery;
+	        if (fallbackTerm && fallbackTerm.length >= 3) {
+	          console.log(`🔍 [Zendesk Check User] Intentando búsqueda amplia en Zendesk con: "${fallbackTerm}"`);
+	          const fallbackRes = await zendeskFetch(`/users/search.json?query=${encodeURIComponent(fallbackTerm)}`);
+	          if (Array.isArray(fallbackRes?.users)) {
+	            rawUsers = fallbackRes.users;
+	          } else if (Array.isArray(fallbackRes?.results)) {
+	            rawUsers = fallbackRes.results;
+	          }
+	        }
+	      }
+	    } catch (zdErr: any) {
+	      console.warn(`[Zendesk Check User Error]: ${zdErr.message}`);
+	      if (zdErr.message && (zdErr.message.includes("no configuradas") || zdErr.message.includes("401"))) {
+	        isConfigured = false;
+	      } else {
+	        throw zdErr;
+	      }
+	    }
+
+	    if (!isConfigured) {
+	      return res.status(200).json({
+	        success: false,
+	        exists: false,
+	        isConfigured: false,
+	        message: "Credenciales de Zendesk no configuradas o no válidas. Configura tu Email y API Token de Zendesk en los ajustes.",
+	        details: "ZENDESK_API_TOKEN / ZENDESK_EMAIL sin definir."
+	      });
+	    }
+
+	    const exists = rawUsers.length > 0;
+
+	    // Enriquecer usuarios con URLs directas y tickets recientes
+	    const users = await Promise.all(
+	      rawUsers.slice(0, 5).map(async (u: any) => {
+	        let recentTickets: any[] = [];
+	        try {
+	          const ticketsRes = await zendeskFetch(`/users/${u.id}/tickets/requested.json?sort_by=created_at&sort_order=desc`);
+	          if (Array.isArray(ticketsRes?.tickets)) {
+	            recentTickets = ticketsRes.tickets.slice(0, 5).map((t: any) => ({
+	              id: t.id,
+	              subject: t.subject || "Sin Asunto",
+	              status: t.status,
+	              priority: t.priority,
+	              created_at: t.created_at,
+	              updated_at: t.updated_at,
+	              zendesk_url: `https://${subdomain}.zendesk.com/agent/tickets/${t.id}`
+	            }));
+	          }
+	        } catch (tErr) {
+	          // No bloqueante si falla la consulta de tickets
+	        }
+
+	        return {
+	          id: u.id,
+	          name: u.name,
+	          email: u.email,
+	          phone: u.phone,
+	          role: u.role,
+	          verified: u.verified,
+	          active: u.active,
+	          suspended: u.suspended,
+	          time_zone: u.time_zone,
+	          created_at: u.created_at,
+	          updated_at: u.updated_at,
+	          organization_id: u.organization_id,
+	          details: u.details,
+	          notes: u.notes,
+	          external_id: u.external_id,
+	          tickets_count: recentTickets.length,
+	          recent_tickets: recentTickets,
+	          zendesk_profile_url: `https://${subdomain}.zendesk.com/agent/users/${u.id}`
+	        };
+	      })
+	    );
+
+	    return res.json({
+	      success: true,
+	      exists,
+	      isConfigured: true,
+	      count: users.length,
+	      user: users[0] || null,
+	      users,
+	      search_criteria: {
+	        email: cleanEmail,
+	        phone: cleanPhone,
+	        name: cleanName,
+	        query: cleanQuery
+	      },
+	      message: exists
+	        ? `✅ ¡Usuario encontrado en Zendesk! (${users.length} coincidencia${users.length > 1 ? "s" : ""})`
+	        : `ℹ️ No se encontró ningún usuario registrado en Zendesk con los criterios ingresados.`
+	    });
+	  } catch (err: any) {
+	    console.error("[Zendesk Check User Error]:", err.message);
+	    return res.status(500).json({
+	      success: false,
+	      exists: false,
+	      error: `Error al consultar la API de Zendesk: ${err.message}`
+	    });
+	  }
+	});
+
 	// Robust Groq OCR endpoint
 	app.post("/api/ocr", async (req, res) => {
 	  try {
@@ -2523,18 +2833,6 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 
 		for (const t of myTasks) {
 		  const due = t.due_date;
-		  const tzTag = timezonesMap[t.id] || "EST";
-		  const timezoneZone = tzOficiales[tzTag] || "America/New_York";
-		  const answeredAt = answeredTimesMap[t.id] || null;
-
-		  const clientLocalTime = new Intl.DateTimeFormat("en-US", {
-			timeZone: timezoneZone,
-			hour: "2-digit",
-			minute: "2-digit",
-			hour12: true
-		  }).format(now);
-
-		  const priorityIndex = tzOrder.indexOf(tzTag) !== -1 ? tzOrder.indexOf(tzTag) : 99;
 
 		  // Resolve phone from JSON map or custom fields
 		  let phoneVal = phonesMap[t.id] || "";
@@ -2551,6 +2849,18 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 			}
 		  }
 
+		  const tzTag = timezonesMap[t.id] || getTimezoneByPhone(phoneVal) || "EST";
+		  const timezoneZone = tzOficiales[tzTag] || "America/New_York";
+		  const answeredAt = answeredTimesMap[t.id] || null;
+
+		  const clientLocalTime = new Intl.DateTimeFormat("en-US", {
+			timeZone: timezoneZone,
+			hour: "2-digit",
+			minute: "2-digit",
+			hour12: true
+		  }).format(now);
+
+		  const priorityIndex = tzOrder.indexOf(tzTag) !== -1 ? tzOrder.indexOf(tzTag) : 99;
 		  const priorityValue = t.priority?.priority || "normal";
 
 		  if (!due) {
@@ -2764,6 +3074,51 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  res.json({ valid: true, message: "Verificación fiscal simulada exitosa" });
 	});
 	
+	const cachedZapierToolNames: Map<string, string> = new Map();
+
+	async function discoverZapierMcpTool(zapierUrl: string, requestedToolName: string): Promise<string | null> {
+	  try {
+	    const response = await fetch(zapierUrl, {
+	      method: "POST",
+	      headers: { "Content-Type": "application/json", "Accept": "application/json, text/event-stream" },
+	      body: JSON.stringify({ jsonrpc: "2.0", id: 99, method: "tools/list" })
+	    });
+	    if (!response.ok) return null;
+	    const text = await response.text();
+	    let data: any = {};
+	    if (text.includes("data:") || text.trim().startsWith("event:")) {
+	      data = parseSseBody(text);
+	    } else {
+	      try {
+	        data = JSON.parse(text);
+	      } catch {
+	        data = parseSseBody(text);
+	      }
+	    }
+	    const tools: any[] = data?.result?.tools || [];
+	    if (!tools || tools.length === 0) return null;
+	    if (tools.some(t => t.name === requestedToolName)) return requestedToolName;
+	    const candidate = tools.find(t => 
+	      t.name.includes("execute") || 
+	      t.name.includes("write") || 
+	      t.name.includes("zapier") || 
+	      t.name.includes("action")
+	    );
+	    if (candidate) {
+	      console.log(`🔧 [Zapier Tool Discovery] "${requestedToolName}" no encontrado. Usando tool disponible en Zapier MCP: "${candidate.name}"`);
+	      return candidate.name;
+	    }
+	    if (tools[0]?.name) {
+	      console.log(`🔧 [Zapier Tool Discovery] Usando primera tool disponible en Zapier MCP: "${tools[0].name}"`);
+	      return tools[0].name;
+	    }
+	    return null;
+	  } catch (err: any) {
+	    console.warn(`[discoverZapierMcpTool Error] ${err.message}`);
+	    return null;
+	  }
+	}
+
 	async function callZapierMcp(zapierUrl: string, params: any, toolName: string = "execute_zapier_write_action") {
   if (!params.output && params.action !== "_zap_raw_request") {
     params.output = "id, status, subject";
@@ -2782,12 +3137,14 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
     // Ignore URL parse error
   }
 
+  const activeToolName = cachedZapierToolNames.get(finalZapierUrl) || toolName;
+
   const payload = {
     jsonrpc: "2.0" as const,
     id: 1,
     method: "tools/call" as const,
     params: {
-      name: toolName,
+      name: activeToolName,
       arguments: params,
     },
   };
@@ -2797,7 +3154,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
     "Accept": "application/json, text/event-stream"
   };
 
-  console.log(`📡 Zapier MCP (callZapierMcp) → ${toolName}`);
+  console.log(`📡 Zapier MCP (callZapierMcp) → ${activeToolName}`);
   console.log(`📦 Params:`, JSON.stringify(params, null, 2));
 
   let response;
@@ -2874,7 +3231,30 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
     }
 
     const msgLower = (body.error.message || "").toLowerCase();
-    if (msgLower && (msgLower.includes("not found") || msgLower.includes("notfound") || msgLower.includes("secret") || body.error.code === -31999)) {
+    const isToolNotFound = body.error.code === -32602 || (msgLower.includes("tool") && msgLower.includes("not found"));
+    if (isToolNotFound) {
+      const prevDiscovered = cachedZapierToolNames.get(finalZapierUrl);
+      cachedZapierToolNames.delete(finalZapierUrl);
+      console.log(`⚠️ [Zapier MCP] Tool "${activeToolName}" no encontrada (-32602). Descubriendo herramientas en Zapier MCP...`);
+      let discovered = await discoverZapierMcpTool(finalZapierUrl, activeToolName);
+      if (!discovered || discovered === activeToolName || discovered === prevDiscovered) {
+        const candidates = [
+          "execute_zapier_write_action",
+          "execute_zapier_action",
+          "execute_action",
+          "zapier_action",
+          "execute_write_action"
+        ];
+        discovered = candidates.find(c => c !== activeToolName && c !== prevDiscovered) || null;
+      }
+      if (discovered && discovered !== prevDiscovered) {
+        cachedZapierToolNames.set(finalZapierUrl, discovered);
+        console.log(`🔄 Reintentando llamada Zapier MCP con tool: "${discovered}"...`);
+        return callZapierMcp(finalZapierUrl, params, discovered);
+      }
+    }
+
+    if (msgLower && (msgLower.includes("secret") || body.error.code === -31999)) {
       console.log(`⚠️ Zapier MCP Error (Gracefully handled): ${body.error.message}`);
       return { success: false, warning: body.error.message, results: [] };
     }
@@ -2935,6 +3315,73 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
     return { raw: rawText };
   }
 }
+
+	// Mark Responded Endpoint
+	app.post("/api/mark-responded", async (req, res) => {
+	  const { task_id, responded, timestamp } = req.body;
+
+	  if (!task_id) {
+	    return res.status(400).json({ error: "task_id requerido" });
+	  }
+
+	  try {
+	    const filePath = path.join(process.cwd(), "src", "data", "answered_times.json");
+	    let data: any = {};
+	    try {
+	      const content = await fsp.readFile(filePath, "utf-8");
+	      data = JSON.parse(content);
+	    } catch (e) {
+	      data = {};
+	    }
+
+	    if (responded === false || responded === "false") {
+	      // Borrar el registro (marcar como "no respondió")
+	      delete data[task_id];
+	    } else {
+	      // Registrar timestamp de respuesta
+	      data[task_id] = timestamp || new Date().toISOString();
+	    }
+
+	    await fsp.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+	    await supabaseUpsert("answered_times", data);
+
+	    console.log(`📌 [Mark Responded] Task ${task_id} → ${responded === false ? "NO respondió" : "SÍ respondió"}`);
+
+	    res.json({
+	      status: "ok",
+	      task_id,
+	      responded: responded !== false && responded !== "false",
+	      recorded_at: data[task_id] || null
+	    });
+	  } catch (err: any) {
+	    console.error("[Mark Responded Error]", err);
+	    res.status(500).json({ error: err.message });
+	  }
+	});
+
+	// GET para consultar si respondió
+	app.get("/api/check-responded/:task_id", async (req, res) => {
+	  const { task_id } = req.params;
+	  try {
+	    const answeredTimes = await obtenerAnsweredTimes();
+	    const respondedAt = answeredTimes[task_id] || null;
+
+	    let businessDaysSinceResponse: number | null = null;
+	    if (respondedAt) {
+	      const responseDate = new Date(respondedAt);
+	      businessDaysSinceResponse = getBusinessDaysDiff(responseDate, new Date());
+	    }
+
+	    res.json({
+	      task_id,
+	      responded: !!respondedAt,
+	      responded_at: respondedAt,
+	      business_days_since: businessDaysSinceResponse
+	    });
+	  } catch (err: any) {
+	    res.status(500).json({ error: err.message });
+	  }
+	});
 
 	// Update Task Timezone
 	app.post("/api/update-timezone", async (req, res) => {
@@ -3188,7 +3635,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	- Si el cliente quiere cancelar, identifícalo como "Regret (CXL Request)" y recuerda la "no-refund, no-return policy signed upon agreement".
 	- Si el producto falló, identifícalo como "Defective Device" o "Defective Syringe".
 	- Mantén una postura ejecutiva, analítica y extremadamente profesional en todas tus respuestas.
-	- 🚨 PROHIBICIÓN ESTRICTA DE FORMATO EMAIL: Tu respuesta es un REPORTE INTERNO para mí (Donna). JAMÁS redactes tu respuesta como si fuera un correo o carta para el cliente. Tienes ESTRICTAMENTE PROHIBIDO usar saludos (Ej: "Dear...", "Estimado cliente...") o despedidas (Ej: "Best regards", "Atentamente"). Ve directo a la información y a los hechos.`;
+	- 🚨 REGLA ABSOLUTA DE REDACCIÓN EN TERCERA PERSONA (REPORTE INTERNO): Tu respuesta es un INFORME / REPORTE INTERNO para el equipo administrativo. Refiérete SIEMPRE a la cliente/cliente en TERCERA PERSONA (ej. "Se intentó contactar a la cliente por correo electrónico...", "La cliente Francesca no ha respondido...", "Se le ofreció un regalo compensatorio...", "Se asignará un deadline a esta tarea..."). JAMÁS redactes el mensaje dirigiéndote a la cliente ("Dear...", "Estimada cliente...", "Te enviamos...", "we reached out to you"). Tienes ESTRICTAMENTE PROHIBIDO usar saludos o despedidas de correo dirigidos al cliente.`;
 
 		const answer = await callGroq(promptFinal, "Eres una IA analista experta. Tienes permiso absoluto para salirte de formatos rígidos si el usuario te pide un resumen o investigar los comentarios a fondo. Si te piden un resumen, hazlo fluido e inteligente.");
 		const elapsed = (Date.now() - startTime) / 1000;
@@ -3263,6 +3710,11 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		const reasonUuid = specificReasonMap[reason] || specificReasonMap[reason?.toLowerCase()] || (await getReasonUuid(reason));
 		if (reasonUuid) {
 		  customFields.push({ id: ID_CF_REASON, value: reasonUuid });
+		}
+
+		const autoResolutionId = determineResolution(reason, initial_comment || "");
+		if (autoResolutionId) {
+		  customFields.push({ id: "55638270-b614-4783-ad1c-0bd994d6484b", value: autoResolutionId });
 		}
 
 		if (sale_date) {
@@ -3431,7 +3883,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 			let existingTicket = null;
 			if (invoice) {
 			  try {
-				existingTicket = await findTicketByInvoice(zapierUrl, String(invoice));
+				existingTicket = await findTicketByInvoice("", String(invoice));
 			  } catch (findErr: any) {
 				console.log("[Process Zendesk Case] Error searching for existing ticket:", findErr.message);
 			  }
@@ -3441,276 +3893,107 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 			  console.log(`[Process Zendesk Case] El ticket de Zendesk para el invoice ${invoice} ya existe: ID ${existingTicket.id}. No crearemos duplicado.`);
 			  zendeskResult = existingTicket;
 			} else {
-			  // 1. Verificar si el usuario ya existe para evitar errores de email duplicado
 			  let existingUser: any = null;
 			  try {
-				existingUser = await findUserByEmail(zapierUrl, cleanEmail);
+				existingUser = await findUserByEmail("", cleanEmail);
 				if (existingUser) {
 				  console.log(`[Process Zendesk Case] Found existing user with ID: ${existingUser.id}`);
-				} else {
-				  console.log("[Process Zendesk Case] No existing user found.");
 				}
 			  } catch (err: any) {
 				console.log("[Process Zendesk Case] Search for existing user failed:", err.message);
 			  }
 
-			  const params = {
-				name: name || cleanEmail.split("@")[0],
-				email: cleanEmail,
-				phone: cleanPhone,
-				external_id: String(invoice),
-				details: `Store: ${cleanStore}\nRegion: ${cleanRegion}\nComment: ${cleanComment || ""}`
-			  };
-
-			  let userResult = null;
-			  try {
-				if (existingUser && existingUser.id) {
-				  // 2. Si existe: Se actualizan los detalles y el número de teléfono con PUT
-				  console.log(`[Process Zendesk Case] User already exists with ID ${existingUser.id}. Updating user details via raw API PUT...`);
-				  const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
-				  const zendeskSub = subdomain.toLowerCase().trim();
-				  const updateUserUrl = `https://${zendeskSub}.zendesk.com/api/v2/users/${existingUser.id}.json`;
-				  userResult = await callZapierMcp(zapierUrl, {
-					selected_api: "ZendeskV2CLIAPI",
-					action: "_zap_raw_request",
-					instructions: `Make a PUT request to update user details in Zendesk. URL is "${updateUserUrl}".`,
-					params: {
-					  url: updateUserUrl,
-					  method: "PUT",
-					  headers: {
-						"Content-Type": "application/json"
-					  },
-					  body: JSON.stringify({
-						user: {
-						  phone: cleanPhone,
-						  external_id: String(invoice),
-						  notes: `Store: ${cleanStore}\nRegion: ${cleanRegion}\nComment: ${cleanComment}`
-						}
-					  }),
-					  fail_on_errors: false
-					},
-					output: "user"
-				  });
-				  console.log("[Process Zendesk Case] User updated successfully via raw PUT:", JSON.stringify(userResult));
-				} else {
-				  // 3. Si no existe: Se crea el usuario nuevo en Zendesk usando raw POST primero
-				  const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
-				  const zendeskSub = subdomain.toLowerCase().trim();
-				  const createUserUrl = `https://${zendeskSub}.zendesk.com/api/v2/users.json`;
-				  
-				  try {
-					console.log("[Process Zendesk Case] Creating user via raw POST...", params);
-					userResult = await callZapierMcp(zapierUrl, {
-					  selected_api: "ZendeskV2CLIAPI",
-					  action: "_zap_raw_request",
-					  instructions: `Make a POST request to create a new user in Zendesk. URL is "${createUserUrl}".`,
-					  params: {
-						url: createUserUrl,
-						method: "POST",
-						headers: {
-						  "Content-Type": "application/json"
-						},
-						body: JSON.stringify({
-						  user: {
-							name: params.name,
-							email: params.email,
-							phone: params.phone,
-							external_id: params.external_id,
-							details: params.details
-						  }
-						}),
-						fail_on_errors: false
-					  },
-					  output: "user"
-					});
-					console.log("[Process Zendesk Case] User created successfully via raw POST:", JSON.stringify(userResult));
-				  } catch (rawCreateErr: any) {
-					console.log(`[Process Zendesk Case] Raw user creation failed: ${rawCreateErr.message}. Trying standard create_user...`);
-					userResult = await callZapierMcp(zapierUrl, {
-					  selected_api: "ZendeskV2CLIAPI",
-					  action: "create_user",
-					  instructions: `Create a new user with name "${params.name}", email "${params.email}", and phone "${params.phone}".`,
-					  params: {
-						name: params.name,
-						email: params.email,
-						phone: params.phone,
-						external_id: params.external_id,
-						details: params.details
-					  },
-					  output: "id, name, email"
-					});
-					console.log("[Process Zendesk Case] User created successfully via standard action:", userResult);
-				  }
-				}
-			  } catch (err: any) {
-				const errMsg = err.message || "";
-				console.log(`[Process Zendesk Case] User setup block caught an error: ${errMsg}`);
-				
-				// Manejo robusto de conflictos (por si el usuario se creó en paralelo o la búsqueda previa falló)
-				if (errMsg.includes("already being used") || errMsg.includes("already exists") || errMsg.includes("taken")) {
-				  console.log("[Process Zendesk Case] Note: Customer already registered in Zendesk. Fetching existing user by email to update phone...");
-				  existingUser = await findUserByEmail(zapierUrl, cleanEmail);
-				  if (existingUser && existingUser.id) {
-					console.log(`[Process Zendesk Case] Found existing user ID ${existingUser.id} after creation conflict. Updating phone details via PUT...`);
-					try {
-					  const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
-					  const zendeskSub = subdomain.toLowerCase().trim();
-					  const updateUserUrl = `https://${zendeskSub}.zendesk.com/api/v2/users/${existingUser.id}.json`;
-					  userResult = await callZapierMcp(zapierUrl, {
-						selected_api: "ZendeskV2CLIAPI",
-						action: "_zap_raw_request",
-						instructions: `Make a PUT request to update user details in Zendesk. URL is "${updateUserUrl}".`,
-						params: {
-						  url: updateUserUrl,
-						  method: "PUT",
-						  headers: {
-							"Content-Type": "application/json"
-						  },
-						  body: JSON.stringify({
-							user: {
-							  phone: cleanPhone,
-							  external_id: String(invoice),
-							  notes: `Store: ${cleanStore}\nRegion: ${cleanRegion}\nComment: ${cleanComment}`
-							}
-						  }),
-						  fail_on_errors: false
-						},
-						output: "user"
-					  });
-					  console.log("[Process Zendesk Case] Conflict fallback user updated successfully:", JSON.stringify(userResult));
-					} catch (updateErr: any) {
-					  console.log("[Process Zendesk Case] Failed to update user during conflict fallback:", updateErr.message);
-					}
-				  }
-				} else {
-				  console.log("[Process Zendesk Case] User setup error (not duplicate), proceeding directly to ticket creation.");
-				}
+			  if (existingUser && existingUser.id) {
+			    try {
+			      await zendeskFetch(`/users/${existingUser.id}.json`, {
+			        method: "PUT",
+			        body: {
+			          user: {
+			            phone: cleanPhone,
+			            external_id: String(invoice),
+			            notes: `Store: ${cleanStore}\nRegion: ${cleanRegion}\nComment: ${cleanComment}`
+			          }
+			        }
+			      });
+			      console.log(`[Process Zendesk Case] User ${existingUser.id} updated successfully.`);
+			    } catch (uErr: any) {
+			      console.warn("Failed updating Zendesk user:", uErr.message);
+			    }
 			  }
-
-			  // Configuración de la URL y el asunto del ticket
-			  const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
-			  const zendeskSub = subdomain.toLowerCase().trim();
-			  const createTicketUrl = `https://${zendeskSub}.zendesk.com/api/v2/tickets.json`;
 
 			  const computedSubject = `Invoice #${invoice} - ${cleanStore} - ${cleanRegion} - PURCHASE FOLLOW-UP`;
 			  const ASSIGNEE_ID = 50176296447379;
 
-			  // Construcción del Payload del Ticket
 			  const ticketPayload: any = {
 				ticket: {
 				  subject: computedSubject,
 				  comment: {
 					body: `Caso para el cliente ${name} (${cleanEmail}).\nSucursal: ${cleanStore}\nRegión: ${cleanRegion}\nComentario inicial: ${cleanComment}`,
-					public: false // Comentario interno por defecto
+					public: false
 				  },
-				  external_id: String(invoice), // Usamos el número de factura como ID externo
+				  external_id: String(invoice),
 				  status: "new",
 				  priority: "normal",
 				  assignee_id: ASSIGNEE_ID
 				}
 			  };
 
-			  const finalRequesterId = existingUser && existingUser.id ? existingUser.id : null;
-			  const userTimeZone = timezone || "America/New_York";
-
-			  // Asociación del "Requester" (Solicitante)
-			  if (finalRequesterId) {
-				// Si el usuario ya existe, usamos su ID
-				ticketPayload.ticket.requester_id = finalRequesterId;
+			  if (existingUser && existingUser.id) {
+				ticketPayload.ticket.requester_id = existingUser.id;
 			  } else {
-				// Si es nuevo, pasamos el objeto para que Zendesk lo cree automáticamente
 				ticketPayload.ticket.requester = {
-				  name: name,
+				  name: name || cleanEmail.split("@")[0],
 				  email: cleanEmail,
-				  time_zone: userTimeZone
+				  time_zone: timezone || "America/New_York"
 				};
 			  }
 
 			  console.log(`🚀 [Zendesk Direct API] Creando ticket en Zendesk...`);
-			  let ticketResult = null;
 			  try {
 			    const directTicket = await zendeskFetch(`/tickets.json`, {
 			      method: "POST",
 			      body: ticketPayload
 			    });
 			    if (directTicket?.ticket) {
-			      ticketResult = directTicket.ticket;
-			      console.log("✅ Zendesk Ticket creado exitosamente vía API directa:", ticketResult);
+			      zendeskResult = directTicket.ticket;
+			      console.log("✅ Zendesk Ticket creado exitosamente vía API directa:", zendeskResult);
 			    }
 			  } catch (dErr: any) {
-			    console.warn("⚠️ Falló creación directa de ticket en Zendesk, intentando Zapier MCP...", dErr.message);
-			  }
-
-			  if (!ticketResult) {
-			    ticketResult = await callZapierMcp(zapierUrl, {
-				selected_api: "ZendeskV2CLIAPI",
-				action: "_zap_raw_request",
-				instructions: `Make a POST request to create a ticket in Zendesk. URL is "${createTicketUrl}". Set headers Content-Type to application/json.`,
-				params: {
-				  url: createTicketUrl,
-				  method: "POST",
-				  headers: {
-					"Content-Type": "application/json"
-				  },
-				  body: JSON.stringify(ticketPayload),
-				  fail_on_errors: false
-				},
-				output: "ticket, results"
-			    }, "execute_zapier_write_action");
-			  }
-
-			  let zendeskResultObj = null;
-			  if (ticketResult && typeof ticketResult === "object") {
-				if (ticketResult.ticket && typeof ticketResult.ticket === "object") {
-				  zendeskResultObj = ticketResult.ticket;
-				} else if (ticketResult.results && typeof ticketResult.results === "object") {
-				  if (ticketResult.results.ticket && typeof ticketResult.results.ticket === "object") {
-					zendeskResultObj = ticketResult.results.ticket;
-				  } else {
-					zendeskResultObj = ticketResult.results;
-				  }
-				} else if (ticketResult.raw && typeof ticketResult.raw === "object" && ticketResult.raw.ticket && typeof ticketResult.raw.ticket === "object") {
-				  zendeskResultObj = ticketResult.raw.ticket;
-				} else if (ticketResult.id) {
-				  zendeskResultObj = ticketResult;
-				}
-			  }
-			  zendeskResult = zendeskResultObj || ticketResult;
-			  console.log("✅ Automatic Zendesk Ticket created via Zapier MCP SSE (Raw request):", zendeskResult);
-			}
-
-			if (zendeskResult) {
-			  try {
-				let zdId = null;
-				if (zendeskResult.id) {
-				  zdId = zendeskResult.id.toString();
-				} else if (zendeskResult.ticket_id) {
-				  zdId = zendeskResult.ticket_id.toString();
-				} else if (typeof zendeskResult === "object") {
-				  const foundKey = Object.keys(zendeskResult).find(k => k.toLowerCase() === "id" || k.toLowerCase().includes("ticket"));
-				  if (foundKey) {
-					zdId = zendeskResult[foundKey]?.toString();
-				  }
-				}
-				if (zdId) {
-				  await guardarZendeskTicketId(taskId, zdId);
-				  console.log(`✅ Automatically stored Zendesk Ticket ID ${zdId} for ClickUp task ${taskId}`);
-				  
-				  // Push translated English comment to Zendesk ticket as an internal note
-				  try {
-					console.log(`[Process Zendesk Case] Pushing translated comment to Zendesk ticket ${zdId}...`);
-					await addNoteByTicketIdRaw(zapierUrl, zdId, translated);
-					console.log(`[Process Zendesk Case] Translated comment pushed to Zendesk successfully.`);
-				  } catch (noteErr: any) {
-					console.error(`[Process Zendesk Case] Error pushing translated comment to Zendesk:`, noteErr.message);
-				  }
-				}
-			  } catch (err: any) {
-				console.warn("Warning storing auto-created zendesk ticket id:", err.message);
+			    console.warn("⚠️ Falló creación directa de ticket en Zendesk:", dErr.message);
 			  }
 			}
 		  } catch (zErr: any) {
 			console.log("ℹ️ Zendesk auto-creation skipped or unconfigured:", zErr.message);
+		  }
+		}
+
+		if (zendeskResult) {
+		  try {
+			let zdId = null;
+			if (zendeskResult.id) {
+			  zdId = zendeskResult.id.toString();
+			} else if (zendeskResult.ticket_id) {
+			  zdId = zendeskResult.ticket_id.toString();
+			} else if (typeof zendeskResult === "object") {
+			  const foundKey = Object.keys(zendeskResult).find(k => k.toLowerCase() === "id" || k.toLowerCase().includes("ticket"));
+			  if (foundKey) {
+				zdId = zendeskResult[foundKey]?.toString();
+			  }
+			}
+			if (zdId && zdId !== "0" && zdId.trim() !== "") {
+			  await guardarZendeskTicketId(taskId, zdId);
+			  console.log(`✅ Automatically stored Zendesk Ticket ID ${zdId} for ClickUp task ${taskId}`);
+			  
+			  try {
+				console.log(`[Process Zendesk Case] Pushing translated initial comment to Zendesk ticket ${zdId}...`);
+				await addNoteByTicketIdRaw("", zdId, translated);
+				console.log(`[Process Zendesk Case] Translated initial comment pushed to Zendesk successfully.`);
+			  } catch (noteErr: any) {
+				console.error(`[Process Zendesk Case] Error pushing translated comment to Zendesk:`, noteErr.message);
+			  }
+			}
+		  } catch (err: any) {
+			console.warn("Warning storing zendesk ticket id or adding internal note:", err.message);
 		  }
 		}
 
@@ -3729,13 +4012,11 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	});
 
 	// ---------------------------------------------------------------------------
-	// Endpoint: Crear Ticket y añadir Comentario vía Zapier MCP (Directo)
+	// Endpoint: Crear Ticket en Zendesk Direct API
 	// ---------------------------------------------------------------------------
 	app.post("/api/zendesk/create-ticket", async (req, res) => {
-	  // 1. Extraemos los datos del frontend (incluyendo el teléfono extraído por OCR o manual)
-	  const { nombre, email, telefono, invoice, comentario, store_location, zapier_token } = req.body;
+	  const { nombre, email, telefono, invoice, comentario, store_location } = req.body;
 
-	  // Validación temprana (Mejor práctica de seguridad y UX)
 	  if (!nombre || !email || !invoice) {
 		return res.status(400).json({ 
 		  success: false, 
@@ -3743,24 +4024,15 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		});
 	  }
 
-	  // Credenciales (Asegúrate de tener ZAPIER_MCP_TOKEN en tu .env)
-	  const zapierToken = zapier_token || process.env.ZAPIER_MCP_TOKEN || "";
-	  const zapierUrl = `https://mcp.zapier.com/api/v1/connect?token=${zapierToken}`;
-
 	  try {
-		console.log(`🚀 Enviando petición de Ticket a Zapier MCP para Invoice: ${invoice}`);
+		console.log(`🚀 Enviando petición de Ticket a Zendesk Direct API para Invoice: ${invoice}`);
 
 		let existingUser = null;
 		try {
-		  existingUser = await findUserByEmail(zapierUrl, email);
+		  existingUser = await findUserByEmail("", email);
 		} catch (err: any) {
 		  console.log("Search for existing user failed:", err.message);
 		}
-
-		// Configuración de la URL y el asunto del ticket
-		const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
-		const zendeskSub = subdomain.toLowerCase().trim();
-		const createTicketUrl = `https://${zendeskSub}.zendesk.com/api/v2/tickets.json`;
 
 		const cleanStore = store_location || "N/A";
 		const cleanRegion = "N/A";
@@ -3769,15 +4041,14 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		const computedSubject = `Invoice #${invoice} - ${cleanStore} - ${cleanRegion} - PURCHASE FOLLOW-UP`;
 		const ASSIGNEE_ID = 50176296447379;
 
-		// Construcción del Payload del Ticket
 		const ticketPayload: any = {
 		  ticket: {
 			subject: computedSubject,
 			comment: {
 			  body: `Caso para el cliente ${nombre} (${email}).\nSucursal: ${cleanStore}\nRegión: ${cleanRegion}\nComentario inicial: ${cleanComment}`,
-			  public: false // Comentario interno por defecto
+			  public: false
 			},
-			external_id: String(invoice), // Usamos el número de factura como ID externo
+			external_id: String(invoice),
 			status: "new",
 			priority: "normal",
 			assignee_id: ASSIGNEE_ID
@@ -3785,53 +4056,36 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		};
 
 		const finalRequesterId = existingUser && existingUser.id ? existingUser.id : null;
-		const userTimeZone = "America/New_York";
 
-		// Asociación del "Requester" (Solicitante)
 		if (finalRequesterId) {
-		  // Si el usuario ya existe, usamos su ID
 		  ticketPayload.ticket.requester_id = finalRequesterId;
 		} else {
-		  // Si es nuevo, pasamos el objeto para que Zendesk lo cree automáticamente
 		  ticketPayload.ticket.requester = {
 			name: nombre,
 			email: email,
-			time_zone: userTimeZone
+			time_zone: "America/New_York"
 		  };
 		}
 
-		// Ejecución de la llamada a través de Zapier
-		const result = await callZapierMcp(zapierUrl, {
-		  selected_api: "ZendeskV2CLIAPI",
-		  action: "_zap_raw_request",
-		  instructions: `Make a POST request to create a ticket in Zendesk. URL is "${createTicketUrl}". Set headers Content-Type to application/json.`,
-		  params: {
-			url: createTicketUrl,
-			method: "POST",
-			headers: {
-			  "Content-Type": "application/json"
-			},
-			body: JSON.stringify(ticketPayload),
-			fail_on_errors: false
-		  },
-		  output: "ticket, results"
-		}, "execute_zapier_write_action");
+		const result = await zendeskFetch("/tickets.json", {
+		  method: "POST",
+		  body: ticketPayload
+		});
 		
 		console.log("✅ Ticket creado en Zendesk exitosamente:", result);
 
-		// 4. Respuesta exitosa al Frontend
 		res.json({
 		  success: true,
 		  message: `Ticket creado exitosamente para el Invoice ${invoice}`,
-		  zapier_mcp_response: result
+		  zendesk_response: result?.ticket || result
 		});
 
 	  } catch (error: any) {
-		console.log("ℹ️ Error al crear el ticket en Zapier MCP (unconfigured):", error.message);
+		console.error("ℹ️ Error al crear el ticket en Zendesk Direct API:", error.message);
 		
 		res.status(500).json({ 
 		  success: false, 
-		  error: "Error al procesar el ticket en Zendesk (sin configurar).",
+		  error: "Error al procesar el ticket en Zendesk.",
 		  details: error.message 
 		});
 	  }
@@ -3842,7 +4096,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	// Log and Push Comment
 	app.post("/api/log-and-push", async (req, res) => {
 	  const startTime = Date.now();
-	  const { task_id, spanish_comment, zapier_token, zendesk_ticket_id } = req.body;
+	  const { task_id, spanish_comment, zapier_token, zendesk_ticket_id, is_no_answer_machine } = req.body;
 
 	  try {
 		const normalizeText = (str: string) => {
@@ -3856,35 +4110,20 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		let detectedStatus = await analyzeStatusTrigger(comentarioCorregido);
 		const msgLower = normalizeText(comentarioCorregido);
 
-		const isLogNuevo = msgLower.includes("log nuevo");
-		if (isLogNuevo) {
+		const isLogNuevo = !is_no_answer_machine;
+		// Record answer time unless explicitly marked as no_answer_machine
+		if (!is_no_answer_machine) {
 		  await guardarAnsweredTime(task_id, new Date().toISOString());
 		}
 
-		const giftTriggers = [
-		  "acepto regalo", "acepto regalo", "acepta regalo", "acepto el regalo", "acepto el regalo",
-		  "accepted gift", "accepts gift", "accepted the gift", 
-		  "de acuerdo en recibir los productos", "de acuerdo con recibir los productos",
-		  "agreed to receive the products", "recibir los productos en compensacion",
-		  "productos en compensacion", "productos como compensacion", 
-		  "products as compensation", "regalo de compensacion"
-		];
-
-		const hasGiftAcceptance = giftTriggers.some(frase => msgLower.includes(normalizeText(frase)));
-		if (hasGiftAcceptance) {
-		  const idx = giftTriggers.findIndex(frase => msgLower.includes(normalizeText(frase)));
-		  const fraseEncontrada = giftTriggers[idx];
-		  const matchIdx = msgLower.indexOf(normalizeText(fraseEncontrada));
-		  const prefijo = msgLower.substring(Math.max(0, matchIdx - 15), matchIdx);
-		  if (!["no", "not", "t "].some(neg => prefijo.includes(neg))) {
-			// Set resolution custom field to GIFT
-			const cfUrl = `https://api.clickup.com/api/v2/task/${task_id}/field/55638270-b614-4783-ad1c-0bd994d6484b`;
-			await fetch(cfUrl, {
-			  method: "POST",
-			  headers: await getClickupHeaders(),
-			  body: JSON.stringify({ value: "94dad466-99f5-4f62-b6a1-f7d0a567ffae" }) // GIFT UUID
-			});
-		  }
+		if (detectIsGift(comentarioCorregido)) {
+		  // Set resolution custom field to GIFT
+		  const cfUrl = `https://api.clickup.com/api/v2/task/${task_id}/field/55638270-b614-4783-ad1c-0bd994d6484b`;
+		  await fetch(cfUrl, {
+			method: "POST",
+			headers: await getClickupHeaders(),
+			body: JSON.stringify({ value: "94dad466-99f5-4f62-b6a1-f7d0a567ffae" }) // GIFT UUID
+		  }).catch(e => console.error("Error setting GIFT resolution field:", e));
 		}
 
 		const triggersCierre = [
@@ -3895,10 +4134,16 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		  "procederemos a cerrar esta tarea", "procederemos a cerrar el caso", "procederemos a cerrar la tarea", "procederemos a cerrar este ticket", "procederemos a cerrar",
 		  "proceder a cerrar esta tarea", "proceder a cerrar la tarea", "proceder a cerrar el ticket", "proceder a cerrar",
 		  "procedo a cerrar esta tarea", "procedo a cerrar la tarea", "procedo a cerrar el ticket", "procedo a cerrar el caso", "procedo a cerrar",
-		  "daremos por cerrada la tarea", "daremos por cerrado el caso", "daremos por cerrado el ticket", "daremos por cerrado",
-		  "dar por cerrada la tarea", "dar por cerrado el caso", "dar por cerrado el ticket", "dar por cerrado",
-		  "caso cerrado", "caso resuelto", "tarea cerrada", "tarea resuelta",
+		  "daremos por cerrada la tarea", "daremos por cerrado el caso", "daremos por cerrado el ticket", "daremos por cerrado", "daremos por resuelto",
+		  "dar por cerrada la tarea", "dar por cerrado el caso", "dar por cerrado el ticket", "dar por cerrado", "dar por resuelto",
+		  "damos por cerrada", "damos por cerrado", "damos por resuelto", "damos por finalizado",
+		  "se da por cerrado", "se da por resuelto", "se da por finalizado", "se da por cerrada",
+		  "caso cerrado", "caso resuelto", "tarea cerrada", "tarea resuelta", "caso solucionado", "ticket solucionado", "tarea solucionada",
 		  "cerramos este caso", "cerramos esta tarea", "cerramos este ticket",
+		  "finalizar tarea", "finalizar ticket", "finalizar caso", "finalizar el ticket", "finalizar la tarea",
+		  "marcar como resuelto", "marcar como cerrado", "marcar como solucionado", "marcar ticket como resuelto",
+		  "se resuelve el ticket", "se resuelve la tarea", "se resuelve el caso",
+		  "solucionado y cerrado", "resuelto y cerrado",
 		  "to close the task", "close the task", "close this task", "close task", "close ticket", "close the ticket", "close this ticket",
 		  "proceed to close this task", "proceed to close the task", "proceed to close task", "proceed to close this ticket", "proceed to close",
 		  "proceeding to close this task", "proceeding to close the task",
@@ -3933,6 +4178,27 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	Text to translate and paraphrase: ${comentarioCorregido}`;
 
 		let commentText = (await callGroq(promptIa, "You are a professional corporate customer service translator.")).trim();
+
+		if (detectIsDeadline(comentarioCorregido) || detectIsDeadline(commentText)) {
+		  detectedStatus = "deadline";
+		}
+
+		const autoResolutionId = determineResolution("", comentarioCorregido) || determineResolution("", commentText);
+		if (autoResolutionId) {
+		  console.log(`🎯 [Resolution Auto-Detect] Updating Resolution field 55638270-b614-4783-ad1c-0bd994d6484b to ${autoResolutionId} for task ${task_id}`);
+		  const cfUrl = `https://api.clickup.com/api/v2/task/${task_id}/field/55638270-b614-4783-ad1c-0bd994d6484b`;
+		  await fetch(cfUrl, {
+			method: "POST",
+			headers: await getClickupHeaders(),
+			body: JSON.stringify({ value: autoResolutionId })
+		  }).catch(e => console.error("Error setting resolution field:", e));
+
+		  if (autoResolutionId === "94dad466-99f5-4f62-b6a1-f7d0a567ffae" && !esCierre && detectedStatus !== "deadline") {
+			if (["envio", "shipment", "tracking", "regalo", "gift", "guia"].some(w => msgLower.includes(w))) {
+			  detectedStatus = "shipment follow up";
+			}
+		  }
+		}
 
 		if (esCierre) {
 		  commentText = "🔒 CLOSURE NOTE & SUMMARY:\n\n" + commentText;
@@ -4015,14 +4281,14 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		  
 		  if (hasValidTicket) {
 			const targetTicketId = rawTicketId;
-			console.log(`📍 Found associated Zendesk Ticket ID ${targetTicketId} for ClickUp task ${task_id}. Pushing internal comment...`);
-			const zapierToken = zapier_token || process.env.ZAPIER_MCP_TOKEN || "";
-			const zapierUrl = `https://mcp.zapier.com/api/v1/connect?token=${zapierToken}`;
+			const isCierre = esCierre || detectedStatus === "Closed";
+			console.log(`📍 Found associated Zendesk Ticket ID ${targetTicketId} for ClickUp task ${task_id}. Pushing internal comment (isCierre: ${isCierre})...`);
 			
-			// ✅ Usar la función mejorada que busca con API cruda y luego agrega la nota
-			const noteResult = await addNoteByTicketIdRaw(zapierUrl, targetTicketId, commentText);
+			const noteResult = await addNoteByTicketIdRaw("", targetTicketId, commentText, isCierre);
 			zendeskStatus = "success";
-			zendeskMessage = `Nota interna agregada correctamente al ticket "${noteResult.ticket_found}".`;
+			zendeskMessage = isCierre 
+			  ? `Nota de cierre agregada y ticket cambiado a "Solved" en Zendesk (${noteResult.ticket_found}).`
+			  : `Nota interna agregada correctamente al ticket "${noteResult.ticket_found}".`;
 		  } else {
 			zendeskMessage = "No se detectó un ID de ticket válido para Zendesk.";
 		  }
@@ -4049,7 +4315,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 
 	// Schedule Call
 	app.post("/api/schedule-call", async (req, res) => {
-	  const { task_id, timestamp, zapier_token, zendesk_ticket_id } = req.body;
+	  const { task_id, timestamp, zendesk_ticket_id } = req.body;
 	  if (!task_id || !timestamp) {
 		return res.status(400).json({ error: "Faltan parámetros obligatorios: task_id y timestamp." });
 	  }
@@ -4074,18 +4340,8 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		};
 		const timezoneZone = tzOficiales[tzTag] || "America/New_York";
 
-		// Format system/server local time
-		const systemDateTimeStr = targetDate.toLocaleString("es-MX", {
-		  year: "numeric",
-		  month: "2-digit",
-		  day: "2-digit",
-		  hour: "2-digit",
-		  minute: "2-digit",
-		  hour12: true
-		});
-
 		// Format client local time
-		const clientDateTimeStr = new Intl.DateTimeFormat("es-MX", {
+		const clientDateTimeStr = new Intl.DateTimeFormat("en-US", {
 		  timeZone: timezoneZone,
 		  year: "numeric",
 		  month: "2-digit",
@@ -4095,32 +4351,25 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		  hour12: true
 		}).format(targetDate);
 
-		// Update due_date in ClickUp
+		// Update due_date in ClickUp (including exact time flag, without posting comments to ClickUp)
 		const cfRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, {
 		  method: "PUT",
 		  headers: {
 			"Authorization": CLICKUP_API_KEY,
 			"Content-Type": "application/json"
 		  },
-		  body: JSON.stringify({ due_date: dueMs })
+		  body: JSON.stringify({
+			due_date: dueMs,
+			due_date_time: true
+		  })
 		});
 
 		if (!cfRes.ok) {
 		  console.error(`Error updating ClickUp due_date: ${cfRes.statusText}`);
 		}
 
-		// Prepare English comment for ClickUp
-		const commentText = `📞 CALL SCHEDULED: Follow-up call set for ${systemDateTimeStr} (Client local time: ${clientDateTimeStr}).`;
-
-		// Post comment to ClickUp
-		await fetch(`https://api.clickup.com/api/v2/task/${task_id}/comment`, {
-		  method: "POST",
-		  headers: {
-			"Authorization": CLICKUP_API_KEY,
-			"Content-Type": "application/json"
-		  },
-		  body: JSON.stringify({ comment_text: commentText })
-		});
+		// Comment for Zendesk
+		const zendeskComment = `📞 SCHEDULED CALL: Follow-up scheduled for ${clientDateTimeStr} (${tzTag}).`;
 
 		// Sincronizar con Zendesk si es posible
 		let zendeskStatus = "none";
@@ -4130,7 +4379,6 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		  let rawTicketId = (zendesk_ticket_id || zendeskMap[task_id] || "").toString().trim();
 		  
 		  if (!rawTicketId || ["none", "null", "undefined", "n/a", "sin ticket"].includes(rawTicketId.toLowerCase())) {
-			// Fallback name parsing
 			const taskRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, { headers: { "Authorization": CLICKUP_API_KEY } });
 			if (taskRes.ok) {
 			  const taskData = await taskRes.json() as any;
@@ -4148,9 +4396,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 
 		  const hasValidTicket = rawTicketId !== "" && !["none", "null", "undefined", "n/a", "sin ticket"].includes(rawTicketId.toLowerCase());
 		  if (hasValidTicket) {
-			const zapierToken = zapier_token || process.env.ZAPIER_MCP_TOKEN || "";
-			const zapierUrl = `https://mcp.zapier.com/api/v1/connect?token=${zapierToken}`;
-			const noteResult = await addNoteByTicketIdRaw(zapierUrl, rawTicketId, commentText);
+			const noteResult = await addNoteByTicketIdRaw("", rawTicketId, zendeskComment);
 			zendeskStatus = "success";
 			zendeskMessage = `Nota de agenda agregada correctamente al ticket "${noteResult.ticket_found}".`;
 		  }
@@ -4205,62 +4451,92 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 
 	// Close Task with Resolution
 	app.post("/api/close-task", async (req, res) => {
-	  const { task_id, spanish_comment, resolution_id, zapier_token, ticket_number } = req.body;
+	  const { task_id, spanish_comment, resolution_id, ticket_number } = req.body;
 
 	  try {
 		const promptIa = `Translate the following Spanish text exactly and professionally to English. Do not add any conversational filler or change the tone. Just translate: ${spanish_comment}`;
 		const translated = (await callGroq(promptIa, "You are a professional corporate translator. Provide only the direct English translation.")).trim();
 
-		// Fetch current task to rearrange the name
 		let rearrangedName = "";
+		let customerName = "CUSTOMER";
+		let storeName = "STORE NAME";
+
 		try {
 		  const taskRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, { headers: { "Authorization": CLICKUP_API_KEY } });
 		  if (taskRes.ok) {
 			const taskData = await taskRes.json() as any;
 			const origName = taskData.name || "";
-			
-			let clientName = "";
 			const finalTicketNum = (ticket_number || "").trim();
 			
+			let clientNameRaw = "";
 			if (origName.includes("-")) {
 			  const parts = origName.split("-");
 			  const firstPart = parts[0].trim();
 			  const restOfParts = parts.slice(1).join("-").trim();
 			  
 			  if (finalTicketNum && firstPart.toLowerCase().includes(finalTicketNum.toLowerCase())) {
-				clientName = restOfParts;
+				clientNameRaw = restOfParts;
 			  } else {
-				clientName = restOfParts || firstPart;
+				clientNameRaw = restOfParts || firstPart;
 			  }
 			} else {
-			  clientName = origName;
+			  clientNameRaw = origName;
 			  if (finalTicketNum) {
 				const regex = new RegExp(`\\b${finalTicketNum}\\b`, "gi");
-				clientName = clientName.replace(regex, "");
+				clientNameRaw = clientNameRaw.replace(regex, "");
 			  }
 			}
 			
-			// Clean leading/trailing spaces, non-alphanumeric at boundaries
-			clientName = clientName.replace(/^[\s\-_#]+|[\s\-_#]+$/g, "").trim();
-			if (!clientName) {
-			  clientName = origName;
+			clientNameRaw = clientNameRaw
+			  .replace(/\[.*?\]/g, "")
+			  .replace(/#\d+/g, "")
+			  .replace(/^[\s\-_#]+|[\s\-_#]+$/g, "")
+			  .trim();
+
+			if (clientNameRaw) {
+			  customerName = clientNameRaw;
+			} else if (origName) {
+			  customerName = origName;
 			}
 			
 			const displayTicket = finalTicketNum || "TICKET";
-			rearrangedName = `${clientName} - #${displayTicket} [RESOLVED]`.toUpperCase();
+			rearrangedName = `${customerName} - #${displayTicket} [RESOLVED]`.toUpperCase();
+
+			// Extract Store / Location from ClickUp Custom Fields if available
+			if (Array.isArray(taskData.custom_fields)) {
+			  for (const field of taskData.custom_fields) {
+				const fName = (field.name || "").toLowerCase();
+				if (fName.includes("store") || fName.includes("location") || fName.includes("tienda") || fName.includes("sucursal")) {
+				  if (field.value !== undefined && field.value !== null) {
+					if (typeof field.value === "string" && field.value.trim()) {
+					  storeName = field.value.trim();
+					} else if (typeof field.value === "number" && field.type_config?.options) {
+					  const opt = field.type_config.options.find((o: any) => o.orderindex === field.value || o.id === field.value);
+					  if (opt?.name) storeName = opt.name;
+					} else if (typeof field.value === "object") {
+					  if (field.value.name) storeName = field.value.name;
+					  else if (Array.isArray(field.value) && field.value[0]?.name) storeName = field.value[0].name;
+					}
+				  }
+				}
+			  }
+			}
 		  }
 		} catch (nameErr) {
-		  console.error("Error fetching task for name rearrangement:", nameErr);
+		  console.error("Error fetching task for details:", nameErr);
 		}
 
-		// Post comment to ClickUp
+		if (storeName === "STORE NAME") {
+		  storeName = "VIP Cosmetics";
+		}
+
+		// 1. ClickUp ONLY receives the team closure note (NOT the public customer message)
 		await fetch(`https://api.clickup.com/api/v2/task/${task_id}/comment`, {
 		  method: "POST",
 		  headers: await getClickupHeaders(),
 		  body: JSON.stringify({ comment_text: `CLOSURE NOTE: ${translated}` })
 		});
 
-		// Update status in ClickUp (Do NOT touch the name of the task)
 		const updatePayload: any = { status: "Closed" };
 		await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, {
 		  method: "PUT",
@@ -4268,109 +4544,89 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		  body: JSON.stringify(updatePayload)
 		});
 
-		// Post resolution ID if present
-		if (resolution_id) {
+		let targetResolutionId = resolution_id;
+		if (!targetResolutionId) {
+		  targetResolutionId = determineResolution("", spanish_comment) || determineResolution("", translated);
+		}
+
+		if (targetResolutionId) {
 		  const cfId = "55638270-b614-4783-ad1c-0bd994d6484b";
 		  await fetch(`https://api.clickup.com/api/v2/task/${task_id}/field/${cfId}`, {
 			method: "POST",
 			headers: await getClickupHeaders(),
-			body: JSON.stringify({ value: resolution_id })
-		  });
+			body: JSON.stringify({ value: targetResolutionId })
+		  }).catch(e => console.error("Error setting resolution field on close:", e));
 		}
 
-		// Call Zapier MCP Connect Webhook
-		const finalZapierToken = zapier_token || process.env.ZAPIER_MCP_TOKEN || "";
-		const zapierUrl = `https://mcp.zapier.com/api/v1/connect?token=${finalZapierToken}`;
-		try {
-		  await fetch(zapierUrl, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-			  event: "ticket_closed",
-			  task_id,
-			  rearranged_name: rearrangedName,
-			  comment: translated,
-			  resolution_id,
-			  ticket_number
-			})
-		  });
-		} catch (zapierErr: any) {
-		  console.warn("Warning triggering Zapier MCP Webhook:", zapierErr.message);
-		}
+		// 2. Build PUBLIC customer message for Zendesk
+		const publicCustomerMessage = `Dear ${customerName},
 
-		// Try to solve/close the ticket directly on Zendesk via Zapier MCP Action
+Per our previous email, this ticket will be closed since we did not receive a response to your last inquiry regarding your purchase at ${storeName}.
+
+If you need further assistance, please reply to this email or call our toll-free number +1 888 249 4189.
+We appreciate your understanding and preference.`;
+
 		let zendeskStatus = "no_attempted";
 		let zendeskMessage = "No se proporcionó número de ticket de Zendesk.";
 
-		if (ticket_number && ticket_number.trim()) {
-		  const cleanTicketNum = ticket_number.trim();
+		try {
+		  const zendeskMap = await obtenerZendeskTicketIds();
+		  let rawTicketId = (ticket_number || zendeskMap[task_id] || "").toString().trim();
 
-		  try {
-			console.log(`🚀 Intentando cerrar Ticket de Zendesk "${cleanTicketNum}" mediante Zapier MCP`);
-			
-			// Paso 1: Agregar nota interna usando el helper canónico addNoteByTicketIdRaw (que maneja pre-lookup internamente)
-			console.log(`📝 Paso 1/2: Agregando nota interna al ticket "${cleanTicketNum}"...`);
-			const noteResult = await addNoteByTicketIdRaw(zapierUrl, cleanTicketNum, `CLOSURE NOTE: ${translated}`);
-			console.log("✅ Nota interna agregada vía canonical helper:", noteResult);
-
-			// Paso 2: Cerrar ticket usando zendeskFetch directamente
-			console.log(`🔒 Paso 2/2: Cerrando ticket "${cleanTicketNum}"...`);
-			let closeResult = null;
+		  if (!rawTicketId || ["none", "null", "undefined", "n/a", "sin ticket"].includes(rawTicketId.toLowerCase())) {
 			try {
-			  closeResult = await zendeskFetch(`/tickets/${cleanTicketNum}.json`, {
-			    method: "PUT",
-			    body: {
-			      ticket: {
-			        status: "solved"
-			      }
-			    }
-			  });
-			  console.log("✅ Ticket cerrado vía Zendesk Direct API:", closeResult);
-			} catch (directCloseErr: any) {
-			  console.log(`ℹ️ Cierre directo falló: ${directCloseErr.message}, intentando Zapier MCP...`);
-			  const subdomain = process.env.ZENDESK_SUBDOMAIN || "vipcosmetics";
-			  const zendeskSub = subdomain.toLowerCase().trim();
-			  const updateTicketUrl = `https://${zendeskSub}.zendesk.com/api/v2/tickets/${cleanTicketNum}.json`;
-			  try {
-			    closeResult = await callZapierMcp(zapierUrl, {
-				selected_api: "ZendeskV2CLIAPI",
-				action: "_zap_raw_request",
-				instructions: `Make a PUT request to solve/close Zendesk ticket with ID ${cleanTicketNum}. URL is "${updateTicketUrl}".`,
-				params: {
-				  url: updateTicketUrl,
-				  method: "PUT",
-				  headers: {
-					"Content-Type": "application/json"
-				  },
-				  body: JSON.stringify({
-					ticket: {
-					  status: "solved"
-					}
-				  }),
-				  fail_on_errors: false
-				},
-				output: "ticket"
-			    });
-			  } catch (rawCloseErr: any) {
-			    closeResult = await callZapierMcp(zapierUrl, {
-				selected_api: "ZendeskV2CLIAPI",
-				action: "update_ticket_v2",
-				instructions: `Update ticket with numeric ID "${cleanTicketNum}" in Zendesk. Set its status to 'solved' and its status category to 'solve'. Do not ask for confirmation.`,
-				params: {
-				  ticket: cleanTicketNum,
-				  status: "solved"
-				},
-				output: "id, status, subject"
-			    });
+			  console.log(`🔍 Intentando auto-detectar ID de Ticket Zendesk desde el nombre de ClickUp para la tarea ${task_id}`);
+			  const taskRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, { headers: { "Authorization": CLICKUP_API_KEY } });
+			  if (taskRes.ok) {
+				const taskData = await taskRes.json() as any;
+				const origName = taskData.name || "";
+				let parsedTicket = "";
+				if (origName.includes("-")) {
+				  const parts = origName.split("-");
+				  parsedTicket = parts[0].trim();
+				} else {
+				  const match = origName.match(/\b([A-Z0-9]{3,10})\b/i);
+				  if (match) {
+					parsedTicket = match[1];
+				  }
+				}
+				if (parsedTicket) {
+				  rawTicketId = parsedTicket;
+				}
 			  }
+			} catch (parseErr: any) {
+			  console.warn("ℹ️ No se pudo parsear el ID del ticket desde el nombre de ClickUp:", parseErr.message);
 			}
-	 
+		  }
+
+		  const cleanTicketNum = rawTicketId.replace(/\D/g, "");
+
+		  if (cleanTicketNum) {
+			console.log(`🚀 [Zendesk Direct API] Enviando mensaje público al cliente y cambiando ticket #${cleanTicketNum} a "solved"`);
+			
+			// Send public message to customer in Zendesk and solve ticket
+			const publicResult = await addNoteByTicketIdRaw("", cleanTicketNum, publicCustomerMessage, true, true);
+			console.log("✅ Mensaje público enviado al cliente y ticket resuelto en Zendesk:", publicResult);
+
+			// Also attach internal work team closure note in Zendesk
+			try {
+			  await addNoteByTicketIdRaw("", cleanTicketNum, `CLOSURE NOTE: ${translated}`, false, false);
+			} catch (intErr: any) {
+			  console.log("ℹ️ Error agregando nota interna en Zendesk:", intErr.message);
+			}
+
 			zendeskStatus = "success";
-			zendeskMessage = `Ticket "${cleanTicketNum}" cerrado exitosamente en Zendesk con nota interna registrada.`;
-		  } catch (zErr: any) {
+			zendeskMessage = `Mensaje público enviado a ${customerName} y ticket #${cleanTicketNum} resuelto (Solved) en Zendesk.`;
+		  }
+		} catch (zErr: any) {
+		  if (zErr.message && zErr.message.includes("closed prevents ticket update")) {
+			console.log(`ℹ️ El ticket ya está resuelto/cerrado en Zendesk.`);
+			zendeskStatus = "success";
+			zendeskMessage = `El ticket ya se encontraba cerrado en Zendesk.`;
+		  } else {
 			zendeskStatus = "failed";
-			zendeskMessage = `Zapier unconfigured or action failed: ${zErr.message}`;
-			console.log("ℹ️ Zendesk auto-closure skipped or failed:", zErr.message);
+			zendeskMessage = `Error al cambiar estado a Solved en Zendesk: ${zErr.message}`;
+			console.log("ℹ️ Zendesk auto-closure failed:", zErr.message);
 		  }
 		}
 
@@ -4414,11 +4670,25 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 
 		// Resolve timezone
 		const timezonesMap = await obtenerTimezones();
-		const tz = timezonesMap[id] || "EST";
+		const tz = timezonesMap[id] || getTimezoneByPhone(phone) || "EST";
 
 		// Resolve Zendesk Ticket ID
 		const zendeskMap = await obtenerZendeskTicketIds();
-		const zendeskTicketId = zendeskMap[id] || "";
+		let zendeskTicketId = zendeskMap[id] || "";
+		if (!zendeskTicketId && data.custom_fields) {
+		  const zdField = (data.custom_fields || []).find((f: any) => 
+			f.id === ID_CF_ZENDESK_TICKET || 
+			(f.name && typeof f.name === "string" && f.name.toLowerCase().includes("zendesk ticket"))
+		  );
+		  if (zdField && zdField.value !== undefined && zdField.value !== null) {
+			const rawVal = typeof zdField.value === "string" ? zdField.value : (zdField.value.url || zdField.value.text || String(zdField.value));
+			if (rawVal) {
+			  zendeskTicketId = rawVal;
+			  // Save to map for future instant reads
+			  guardarZendeskTicketId(id, rawVal).catch(() => {});
+			}
+		  }
+		}
 
 		// Resolve Answered Time
 		const answeredTimesMap = await obtenerAnsweredTimes();
@@ -4566,9 +4836,9 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	Lee todo el hilo de comentarios y responde su pregunta basándote ÚNICAMENTE en la información de este caso y tu manual.
 	Sé clara, directa, amigable y muy profesional. Si te pide un resumen, cuéntale la historia del ticket de forma breve y fluida. 
 
-	💼 OFFICIAL CORPORATE TONE (INTERNAL):
-	Usa el vocabulario oficial de la empresa. Reconoce términos como "First Sale Refund", "GBK (Give Back tax refund)", "Shalem (Payment plan)", y "Docusign". Si sugieres respuestas para el cliente, usa un tono ejecutivo: "We would like to compensate you by offering..." o "Please let us know your preference to continue with the process".
-	- 🚨 PROHIBICIÓN DE FORMATO EMAIL: A menos que yo te pida explícitamente "redacta un correo", tu respuesta debe ser una plática directa y al grano conmigo. Cero saludos formales ("Dear...") ni despedidas ("Best regards").
+	💼 OFFICIAL CORPORATE TONE (INTERNAL REPORTING ONLY):
+	Usa el vocabulario oficial de la empresa. Reconoce términos como "First Sale Refund", "GBK (Give Back tax refund)", "Shalem (Payment plan)", y "Docusign".
+	- 🚨 REGLA ABSOLUTA DE REDACCIÓN EN TERCERA PERSONA (REPORTE INTERNO): Tu respuesta es un INFORME / REPORTE INTERNO para el equipo administrativo. Refiérete SIEMPRE a la cliente/cliente en TERCERA PERSONA (ej. "Se intentó contactar a la cliente por correo electrónico...", "La cliente Francesca no ha respondido...", "Se le ofreció un regalo compensatorio...", "Se asignará un deadline a esta tarea..."). JAMÁS redactes el mensaje dirigiéndote a la cliente ("Dear...", "Estimada cliente...", "Te enviamos...", "we reached out to you"). Tienes ESTRICTAMENTE PROHIBIDO usar saludos o despedidas de correo dirigidos al cliente.
 
 	🚫 REGLA ESTRICTA DE "FALSOS POSITIVOS" Y CITAS: 
 	- 🚨 JAMÁS uses frases como "[AGENTE INTENTÓ CONTACTAR PERO CLIENTE NO RESPONDIÓ]" para justify que hubo contacto. Esas etiquetas significan que el contacto FALLÓ rotundamente.`;
@@ -5290,14 +5560,21 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		const folderId = targetFolder.Id.startsWith("fo") ? targetFolder.Id : `fo${targetFolder.Id}`;
 		const folderUrl = `https://${subdomain.toLowerCase()}.sharefile.com/home/shared/${folderId}`;
 
-// Siempre devolver éxito, con advertencias si las hay
-return res.json({
-  success: true,
-  url: folderUrl,
-  folder: targetFolder,
-  warnings: warnings.length > 0 ? warnings : undefined,
-  strategy: "2-query-invoice-surgical"
-});
+		const enrichedChildren = normalizedChildren.map((child: any) => ({
+		  ...child,
+		  downloadUrl: `/api/sharefile/download-file/${child.Id}?name=${encodeURIComponent(child.Name || 'archivo')}`
+		}));
+
+		// Siempre devolver éxito, con archivos y enlace de descarga ZIP
+		return res.json({
+		  success: true,
+		  url: folderUrl,
+		  folder: targetFolder,
+		  files: enrichedChildren,
+		  zipDownloadUrl: `/api/sharefile/download-folder-zip/${folderId}?invoice=${encodeURIComponent(invoice || '')}`,
+		  warnings: warnings.length > 0 ? warnings : undefined,
+		  strategy: "2-query-invoice-surgical"
+		});
 
 		res.status(404).json({ 
 		  success: false, 
@@ -5309,6 +5586,255 @@ return res.json({
 		console.error("[ShareFile Search Folder Error]", error);
 		const isAuthError = !!(error.message && (error.message.includes("401") || error.message.includes("Unauthorized") || error.message.includes("NotAuthenticated")));
 		res.status(500).json({ success: false, error: error.message, authError: isAuthError });
+	  }
+	});
+
+	// Endpoint para descargar un archivo individual de ShareFile
+	app.get("/api/sharefile/download-file/:itemId", async (req, res) => {
+	  const { itemId } = req.params;
+	  const fileNameQuery = (req.query.name as string) || `ShareFile_Item_${itemId}`;
+
+	  try {
+		let token = process.env.SHAREFILE_ACCESS_TOKEN;
+		const apiBaseUrl = process.env.SHAREFILE_API_BASE_URL;
+
+		if (!token || !apiBaseUrl) {
+		  console.log(`[ShareFile Download File] No credentials. Returning demo file content for ${itemId}`);
+		  const finalName = fileNameQuery.match(/\.[a-z0-9]+$/i) ? fileNameQuery : `${fileNameQuery}.pdf`;
+		  res.setHeader("Content-Type", "application/octet-stream");
+		  res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(finalName)}"`);
+		  return res.send(`[DEMO SHAREFILE ARCHIVO]\nID de Elemento: ${itemId}\nNombre: ${fileNameQuery}\nFecha de Descarga: ${new Date().toISOString()}\nEste es un archivo de demostración simulado porque no hay credenciales de Citrix ShareFile configuradas.`);
+		}
+
+		const baseUrl = apiBaseUrl.replace(/\/$/, "");
+		const downloadUrl = `${baseUrl}/Items(${itemId})/Download`;
+
+		let sfRes = await fetch(downloadUrl, {
+		  headers: { "Authorization": `Bearer ${token}` },
+		  redirect: "manual"
+		});
+
+		if (!sfRes.ok && sfRes.status === 401) {
+		  const newToken = await refreshShareFileAccessToken();
+		  if (newToken) {
+			token = newToken;
+			sfRes = await fetch(downloadUrl, {
+			  headers: { "Authorization": `Bearer ${newToken}` },
+			  redirect: "manual"
+			});
+		  }
+		}
+
+		let finalDownloadUrl = downloadUrl;
+		if (sfRes.status === 301 || sfRes.status === 302 || sfRes.status === 307 || sfRes.status === 308) {
+		  const location = sfRes.headers.get("location");
+		  if (location) finalDownloadUrl = location;
+		} else if (sfRes.ok) {
+		  const contentType = sfRes.headers.get("content-type") || "";
+		  if (contentType.includes("application/json")) {
+			const json = await sfRes.json();
+			finalDownloadUrl = json.DownloadUrl || downloadUrl;
+		  } else {
+			finalDownloadUrl = sfRes.url;
+		  }
+		}
+
+		const fileRes = await fetch(finalDownloadUrl);
+		if (!fileRes.ok) {
+		  throw new Error(`Error al obtener archivo binario desde CDN ShareFile: HTTP ${fileRes.status}`);
+		}
+
+		const contentType = fileRes.headers.get("content-type") || "application/octet-stream";
+		res.setHeader("Content-Type", contentType);
+		res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(fileNameQuery)}"`);
+
+		const arrayBuffer = await fileRes.arrayBuffer();
+		const buffer = Buffer.from(arrayBuffer);
+		res.send(buffer);
+	  } catch (err: any) {
+		console.error(`[ShareFile Download Error] Item ${itemId}:`, err.message);
+		res.setHeader("Content-Type", "text/plain");
+		res.setHeader("Content-Disposition", `attachment; filename="Error_${itemId}.txt"`);
+		res.status(500).send(`Error al descargar archivo desde ShareFile: ${err.message}`);
+	  }
+	});
+
+	// Endpoint para descargar TODOS los archivos de una carpeta en un archivo .ZIP
+	app.get("/api/sharefile/download-folder-zip/:folderId", async (req, res) => {
+	  const { folderId } = req.params;
+	  const invoice = (req.query.invoice as string) || "";
+	  const zipFileName = invoice ? `ShareFile_Invoice_${invoice}_Archivos.zip` : `ShareFile_Carpeta_${folderId}_Archivos.zip`;
+
+	  res.setHeader("Content-Type", "application/zip");
+	  res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(zipFileName)}"`);
+
+	  const archive = archiver("zip", { zlib: { level: 9 } });
+	  archive.pipe(res);
+
+	  try {
+		let token = process.env.SHAREFILE_ACCESS_TOKEN;
+		const apiBaseUrl = process.env.SHAREFILE_API_BASE_URL;
+
+		if (!token || !apiBaseUrl) {
+		  console.log(`[ShareFile Zip Download] No credentials. Packing demo zip for folder ${folderId}`);
+		  archive.append(`[DEMO RECIBO DE FACTURA]\nInvoice: ${invoice || "MM-DEMO"}\nCarpeta ID: ${folderId}\nFecha: ${new Date().toISOString()}`, { name: `FACTURA_${invoice || 'DEMO'}.txt` });
+		  archive.append(`[DEMO VOUCHER DE TERMINAL]\nVoucher de Pago Aprobado\nTerminal A`, { name: `VOUCHER_${invoice || 'DEMO'}.txt` });
+		  await archive.finalize();
+		  return;
+		}
+
+		const baseUrl = apiBaseUrl.replace(/\/$/, "");
+		let cleanFolderId = folderId;
+		if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(cleanFolderId)) {
+		  cleanFolderId = `fo${cleanFolderId}`;
+		}
+
+		const childrenUrl = `${baseUrl}/Items(${cleanFolderId})/Children?$top=100`;
+		let childrenRes = await fetch(childrenUrl, {
+		  headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" }
+		});
+
+		if (!childrenRes.ok && childrenRes.status === 401) {
+		  const newToken = await refreshShareFileAccessToken();
+		  if (newToken) {
+			token = newToken;
+			childrenRes = await fetch(childrenUrl, {
+			  headers: { "Authorization": `Bearer ${newToken}`, "Accept": "application/json" }
+			});
+		  }
+		}
+
+		if (!childrenRes.ok) {
+		  archive.append(`Error al listar contenido de la carpeta ${folderId}: HTTP ${childrenRes.status}`, { name: "ERROR_INFO.txt" });
+		  await archive.finalize();
+		  return;
+		}
+
+		const childrenData = await childrenRes.json();
+		const rawChildren = childrenData.value || [];
+		const filesOnly = rawChildren.filter((item: any) => {
+		  const isFolder = !!(item["odata.type"]?.includes("Folder") || item.typename === "Folder" || item.type === "Folder" || item.FileCount !== undefined);
+		  return !isFolder;
+		});
+
+		if (filesOnly.length === 0) {
+		  archive.append(`La carpeta de ShareFile (${folderId}) no contiene archivos de imagen/pdf directamente.`, { name: "CARPETA_VACIA.txt" });
+		  await archive.finalize();
+		  return;
+		}
+
+		for (const fileItem of filesOnly) {
+		  const itemId = fileItem.Id || fileItem.id;
+		  const fileName = fileItem.Name || fileItem.name || `archivo_${itemId}`;
+		  try {
+			const downloadUrl = `${baseUrl}/Items(${itemId})/Download`;
+			let sfRes = await fetch(downloadUrl, {
+			  headers: { "Authorization": `Bearer ${token}` },
+			  redirect: "manual"
+			});
+
+			let finalUrl = downloadUrl;
+			if (sfRes.status === 301 || sfRes.status === 302 || sfRes.status === 307 || sfRes.status === 308) {
+			  const location = sfRes.headers.get("location");
+			  if (location) finalUrl = location;
+			} else if (sfRes.ok) {
+			  if (sfRes.headers.get("content-type")?.includes("application/json")) {
+				const json = await sfRes.json();
+				finalUrl = json.DownloadUrl || downloadUrl;
+			  } else {
+				finalUrl = sfRes.url;
+			  }
+			}
+
+			const binaryRes = await fetch(finalUrl);
+			if (binaryRes.ok) {
+			  const arrayBuf = await binaryRes.arrayBuffer();
+			  archive.append(Buffer.from(arrayBuf), { name: fileName });
+			} else {
+			  archive.append(`Error al descargar ${fileName}: HTTP ${binaryRes.status}`, { name: `ERROR_${fileName}.txt` });
+			}
+		  } catch (fileErr: any) {
+			archive.append(`Error procesando ${fileName}: ${fileErr.message}`, { name: `ERROR_${fileName}.txt` });
+		  }
+		}
+
+		await archive.finalize();
+	  } catch (err: any) {
+		console.error(`[ShareFile Zip Error] Folder ${folderId}:`, err.message);
+		archive.append(`Error general al generar archivo ZIP: ${err.message}`, { name: "ERROR_GENERAL.txt" });
+		await archive.finalize();
+	  }
+	});
+
+	// Endpoint para consultar archivos contenidos en una carpeta específica con enlaces de descarga
+	app.get("/api/sharefile/folder-files/:folderId", async (req, res) => {
+	  const { folderId } = req.params;
+	  try {
+		let token = process.env.SHAREFILE_ACCESS_TOKEN;
+		const apiBaseUrl = process.env.SHAREFILE_API_BASE_URL;
+
+		if (!token || !apiBaseUrl) {
+		  return res.json({
+			success: true,
+			isDemo: true,
+			files: [
+			  {
+				Id: `fida_demo_1_${folderId}`,
+				Name: `FACTURA_${folderId}.jpg`,
+				FileSizeBytes: 204800,
+				downloadUrl: `/api/sharefile/download-file/fida_demo_1_${folderId}?name=FACTURA_${folderId}.jpg`
+			  },
+			  {
+				Id: `fida_demo_2_${folderId}`,
+				Name: `VOUCHER_${folderId}.png`,
+				FileSizeBytes: 145000,
+				downloadUrl: `/api/sharefile/download-file/fida_demo_2_${folderId}?name=VOUCHER_${folderId}.png`
+			  }
+			],
+			zipDownloadUrl: `/api/sharefile/download-folder-zip/${folderId}`
+		  });
+		}
+
+		const baseUrl = apiBaseUrl.replace(/\/$/, "");
+		let cleanFolderId = folderId;
+		if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(cleanFolderId)) {
+		  cleanFolderId = `fo${cleanFolderId}`;
+		}
+
+		const childrenUrl = `${baseUrl}/Items(${cleanFolderId})/Children?$top=100`;
+		let childrenRes = await fetch(childrenUrl, {
+		  headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" }
+		});
+
+		if (!childrenRes.ok && childrenRes.status === 401) {
+		  const newToken = await refreshShareFileAccessToken();
+		  if (newToken) {
+			token = newToken;
+			childrenRes = await fetch(childrenUrl, {
+			  headers: { "Authorization": `Bearer ${newToken}`, "Accept": "application/json" }
+			});
+		  }
+		}
+
+		if (!childrenRes.ok) {
+		  throw new Error(`ShareFile Children API devolvió estatus ${childrenRes.status}`);
+		}
+
+		const childrenData = await childrenRes.json();
+		const rawChildren = childrenData.value || [];
+		const normalized = rawChildren.map(normalizeShareFileItem).filter(Boolean);
+		const files = normalized.map((item: any) => ({
+		  ...item,
+		  downloadUrl: `/api/sharefile/download-file/${item.Id}?name=${encodeURIComponent(item.Name || 'archivo')}`
+		}));
+
+		res.json({
+		  success: true,
+		  files,
+		  zipDownloadUrl: `/api/sharefile/download-folder-zip/${cleanFolderId}`
+		});
+	  } catch (err: any) {
+		res.status(500).json({ success: false, error: err.message });
 	  }
 	});
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Task, ChatMessage } from "../types";
+import { getTimezoneByPhone } from "../data/areaCodes";
 import { 
   X, 
   MapPin, 
@@ -16,8 +17,12 @@ import {
   Copy,
   Plus,
   Phone,
-  Save
+  PhoneOff,
+  Save,
+  User,
+  UserCheck
 } from "lucide-react";
+import ZendeskUserChecker from "./ZendeskUserChecker";
 
 interface TaskDetailModalProps {
   taskId: string;
@@ -30,7 +35,7 @@ interface TaskDetailModalProps {
 export default function TaskDetailModal({ taskId, onClose, onActionComplete, onTaskUpdated, showToast }: TaskDetailModalProps) {
   const [task, setTask] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [activeSubTab, setActiveSubTab] = useState<"actions" | "chat" | "cloning">("actions");
+  const [activeSubTab, setActiveSubTab] = useState<"actions" | "zendesk_user" | "chat" | "cloning">("actions");
 
   const [currentTaskId, setCurrentTaskId] = useState(taskId);
 
@@ -51,19 +56,13 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [scheduleDate, setScheduleDate] = useState("");
   const [scheduleTime, setScheduleTime] = useState("");
+  const [scheduleRefMode, setScheduleRefMode] = useState<"agent" | "client">("agent");
   const [schedulingCall, setSchedulingCall] = useState(false);
   const [scheduleSuccess, setScheduleSuccess] = useState(false);
 
   // State for Closure
   const [resolutionId, setResolutionId] = useState("ce10b2a1-fa41-4776-bebe-0814d45be7ea"); // Default REFUND
   const [closureComment, setClosureComment] = useState("");
-  const [zapierToken, setZapierToken] = useState(() => {
-    return localStorage.getItem("ZAPIER_MCP_TOKEN") || "";
-  });
-
-  useEffect(() => {
-    localStorage.setItem("ZAPIER_MCP_TOKEN", zapierToken);
-  }, [zapierToken]);
 
   // State for Cloning
   const [cloneMethod, setCloneMethod] = useState("CHECK");
@@ -76,6 +75,123 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
   ]);
   const [chatLoading, setChatLoading] = useState(false);
   const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  // Live clock state for client and agent local time
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const tzOficialesMap: Record<string, string> = {
+    "NST": "America/St_Johns",
+    "AST": "America/Puerto_Rico",
+    "EST": "America/New_York",
+    "CST": "America/Chicago",
+    "MST": "America/Denver",
+    "PHX": "America/Phoenix",
+    "PST": "America/Los_Angeles",
+    "AKST": "America/Anchorage",
+    "HST": "Pacific/Honolulu"
+  };
+
+  const getClientLiveTime = (tzTag?: string) => {
+    const zone = tzOficialesMap[tzTag || "EST"] || "America/New_York";
+    try {
+      return new Intl.DateTimeFormat("en-US", {
+        timeZone: zone,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true
+      }).format(now);
+    } catch {
+      return "--:--";
+    }
+  };
+
+  const getAgentLiveTime = () => {
+    try {
+      return new Intl.DateTimeFormat("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true
+      }).format(now);
+    } catch {
+      return "--:--";
+    }
+  };
+
+  const effectiveTz = newTimezone || (clientPhone ? getTimezoneByPhone(clientPhone) : null) || task?.timezone || "EST";
+  const clientLiveTime = getClientLiveTime(effectiveTz);
+  const agentLiveTime = getAgentLiveTime();
+
+  // Helper function to get exact timestamp for a given date/time in a specific IANA timezone
+  const getTimestampFromZone = (dateStr: string, timeStr: string, ianaZone: string): number => {
+    if (!dateStr || !timeStr) return Date.now();
+    const naiveUtc = new Date(`${dateStr}T${timeStr}:00Z`);
+    if (isNaN(naiveUtc.getTime())) return Date.now();
+
+    try {
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: ianaZone,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+      });
+      
+      const parts = formatter.formatToParts(naiveUtc);
+      const map: Record<string, string> = {};
+      parts.forEach(p => map[p.type] = p.value);
+      
+      const y = map.year;
+      const m = map.month;
+      const d = map.day;
+      const h = map.hour === '24' ? '00' : map.hour;
+      const min = map.minute;
+      const s = map.second;
+      
+      const formattedUtc = new Date(`${y}-${m}-${d}T${h}:${min}:${s}Z`).getTime();
+      const offsetMs = formattedUtc - naiveUtc.getTime();
+      return naiveUtc.getTime() - offsetMs;
+    } catch {
+      return new Date(`${dateStr}T${timeStr}`).getTime();
+    }
+  };
+
+  const formatTimestampInZone = (ts: number, ianaZone?: string) => {
+    try {
+      const d = new Date(ts);
+      return new Intl.DateTimeFormat("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: ianaZone,
+        timeZoneName: "short"
+      }).format(d);
+    } catch {
+      return "--:--";
+    }
+  };
+
+  // Scheduled call timestamp preview calculations
+  const clientIanaZone = tzOficialesMap[effectiveTz] || "America/New_York";
+  const agentBrowserIanaZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  let computedScheduledTimestamp = Date.now();
+  if (scheduleDate && scheduleTime) {
+    if (scheduleRefMode === "client") {
+      computedScheduledTimestamp = getTimestampFromZone(scheduleDate, scheduleTime, clientIanaZone);
+    } else {
+      const localDate = new Date(`${scheduleDate}T${scheduleTime}`);
+      computedScheduledTimestamp = isNaN(localDate.getTime()) ? Date.now() : localDate.getTime();
+    }
+  }
+
+  const previewAgentTimeStr = formatTimestampInZone(computedScheduledTimestamp, agentBrowserIanaZone);
+  const previewClientTimeStr = formatTimestampInZone(computedScheduledTimestamp, clientIanaZone);
 
   const timezones = ["NST", "AST", "EST", "CST", "MST", "PHX", "PST", "AKST", "HST"];
 
@@ -149,13 +265,12 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
   };
 
   const resolutions = [
-    { id: "ce10b2a1-fa41-4776-bebe-0814d45be7ea", name: "REFUND / REEMBOLSO" },
+    { id: "e9367f41-cb3b-42f0-b612-6528d02098dc", name: "REFUND / REEMBOLSO" },
     { id: "94dad466-99f5-4f62-b6a1-f7d0a567ffae", name: "GIFT / REGALO COMPENSACIÓN" },
-    { id: "ee1a1e07-a9b6-4209-a7bc-87162005e2f2", name: "DISPUTE / DISPUTA BANCARIA" },
-    { id: "0eab1c14-a0de-49a6-b0be-ebc45e6abc1e", name: "LOST LEAD / CLIENTE PERDIDO" },
-    { id: "ff1356b9-ca85-4505-8b95-00fd35b4d239", name: "RESOLVED / SOLUCIONADO" },
-    { id: "64ce361e-f014-4103-96ed-c373b330680a", name: "DEAD DISPUTE" },
-    { id: "1da2df32-4113-4002-a0d7-40b571025ea0", name: "FRAUD / FRAUDE" }
+    { id: "a148c4e2-b2f3-4b6d-9cf6-6eb8255c6099", name: "DISPUTE / DISPUTA BANCARIA" },
+    { id: "49bb94ed-70b8-4d8f-80ae-8b4f8ab9b04e", name: "LOST LEAD / CLIENTE PERDIDO" },
+    { id: "cdc84079-b6a3-4665-9161-97d8d7bac5eb", name: "P+R / PENDIENTE + REGLAS" },
+    { id: "550d1479-412d-45f9-b7da-64cd69473af1", name: "RESOLVED / SOLUCIONADO" }
   ];
 
   // Fetch Task Data from ClickUp via our local API route (we can use AI Search or fetch directly if needed, let's query our backend)
@@ -203,7 +318,8 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
 
       setNewTimezone(detailsData.timezone || "EST");
       setClientPhone(detailsData.phone || "");
-      setZendeskTicketId(detailsData.zendesk_ticket_id || "");
+      const zdTicket = detailsData.zendesk_ticket_id || "";
+      setZendeskTicketId(zdTicket);
 
       // Try to parse and prefill ticket number from name
       const originalName = detailsData.name || "";
@@ -217,7 +333,7 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
           parsedTicket = match[1];
         }
       }
-      setTicketNumber(parsedTicket);
+      setTicketNumber(zdTicket || parsedTicket);
     } catch (err) {
       console.error("Error loading task details:", err);
       setTask({
@@ -309,22 +425,19 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
     }
   };
 
-  const handleLogAndPush = async (customComment?: string) => {
+  const handleLogAndPush = async (customComment?: string, isNoAnswerMachine: boolean = false) => {
     const commentToSend = customComment || spanishComment;
     if (!commentToSend.trim()) return;
     setSubmittingAction(true);
     try {
-      if (zapierToken) {
-        localStorage.setItem("ZAPIER_MCP_TOKEN", zapierToken);
-      }
       const res = await fetch(`/api/log-and-push`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           task_id: taskId, 
           spanish_comment: commentToSend,
-          zapier_token: zapierToken,
-          zendesk_ticket_id: zendeskTicketId || ticketNumber
+          zendesk_ticket_id: zendeskTicketId || ticketNumber,
+          is_no_answer_machine: isNoAnswerMachine
         })
       });
       if (res.ok) {
@@ -352,11 +465,17 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
         }
         
         if (data.trigger_schedule) {
-          // Preset to tomorrow at current time
-          const tomorrow = new Date();
-          tomorrow.setDate(tomorrow.getDate() + 1);
-          setScheduleDate(tomorrow.toISOString().split('T')[0]);
-          setScheduleTime(new Date().toTimeString().slice(0, 5));
+          // Preset to tomorrow at current local time
+          const now = new Date();
+          const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+          const year = tomorrow.getFullYear();
+          const month = String(tomorrow.getMonth() + 1).padStart(2, '0');
+          const day = String(tomorrow.getDate()).padStart(2, '0');
+          setScheduleDate(`${year}-${month}-${day}`);
+
+          const hours = String(now.getHours()).padStart(2, '0');
+          const minutes = String(now.getMinutes()).padStart(2, '0');
+          setScheduleTime(`${hours}:${minutes}`);
           setShowScheduleModal(true);
         } else {
           onActionComplete(true);
@@ -386,8 +505,7 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
 
     setSchedulingCall(true);
     try {
-      const localDateTime = new Date(`${scheduleDate}T${scheduleTime}`);
-      const timestamp = localDateTime.getTime();
+      const timestamp = computedScheduledTimestamp;
 
       const res = await fetch(`/api/schedule-call`, {
         method: "POST",
@@ -395,7 +513,6 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
         body: JSON.stringify({
           task_id: taskId,
           timestamp,
-          zapier_token: zapierToken,
           zendesk_ticket_id: zendeskTicketId || ticketNumber
         })
       });
@@ -425,8 +542,12 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
   };
 
   const handleNoAnswer = () => {
-    const noAnswerComment = "INTENTO DE CONTACTO TELEFÓNICO FALLIDO. DEJAMOS BUZÓN DE VOZ, ENVIAREMOS EMAIL DE SEGUIMIENTO Y PROGRAMAREMOS NUEVA ALERTA.";
-    handleLogAndPush(noAnswerComment);
+    const defaultTemplate = "INTENTO DE CONTACTO TELEFÓNICO FALLIDO (MÁQUINA / BUZÓN DE VOZ). DEJAMOS MENSAJE Y SEGUIMOS PROCESO.";
+    if (!spanishComment.trim()) {
+      setSpanishComment(defaultTemplate);
+    } else {
+      handleLogAndPush(spanishComment, true);
+    }
   };
 
   const handleBankPause = async () => {
@@ -450,19 +571,17 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
   };
 
   const handleCloseTask = async () => {
+    const finalTicketNum = (ticketNumber || zendeskTicketId).trim();
     if (!closureComment.trim()) {
       alert("Por favor añade un comentario de cierre para documentar el caso.");
       return;
     }
-    if (!ticketNumber.trim()) {
+    if (!finalTicketNum) {
       alert("Por favor ingresa el número de ticket para poder reacomodar el título.");
       return;
     }
     setSubmittingAction(true);
     try {
-      if (zapierToken) {
-        localStorage.setItem("ZAPIER_MCP_TOKEN", zapierToken);
-      }
       const res = await fetch(`/api/close-task`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -470,8 +589,7 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
           task_id: taskId,
           spanish_comment: closureComment,
           resolution_id: resolutionId,
-          zapier_token: zapierToken,
-          ticket_number: ticketNumber
+          ticket_number: finalTicketNum
         })
       });
       if (res.ok) {
@@ -559,24 +677,75 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
     }
   };
 
+  const activeZdId = (zendeskTicketId || ticketNumber || "").trim().replace(/\D/g, "");
+
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex justify-end z-50 animate-fade-in">
       <div className="w-full max-w-2xl bg-slate-950/80 backdrop-blur-2xl border-l border-white/15 h-full flex flex-col justify-between shadow-[0_0_50px_rgba(0,0,0,0.8)] relative">
         
         {/* Modal Header */}
         <div className="p-6 border-b border-white/10 flex items-center justify-between bg-white/5">
-          <div className="min-w-0 pr-4">
-            <span className="text-[10px] font-mono font-bold tracking-widest text-white/60 uppercase block">Detalle y Acciones Rápidas</span>
-            <h3 className="text-base font-bold text-white mt-1 leading-snug truncate">
+          <div className="min-w-0 pr-4 space-y-2 flex-1">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className="text-[10px] font-mono font-bold tracking-widest text-white/60 uppercase block">Detalle y Acciones Rápidas</span>
+              
+              {/* Top Client & Agent Live Local Time Badge */}
+              <div className="flex items-center gap-2 bg-cyan-950/70 border border-cyan-500/40 px-3 py-1 rounded-xl text-xs font-mono shadow-[0_0_12px_rgba(6,182,212,0.15)] flex-wrap">
+                <Clock className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+                <span className="text-white/60 text-[11px]">Hora Cliente:</span>
+                <span className="text-cyan-300 font-bold text-sm">{clientLiveTime}</span>
+                <span className="text-xs font-bold text-cyan-400/90 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">{effectiveTz}</span>
+
+                <span className="text-white/20 text-xs px-1">|</span>
+
+                <span className="text-white/60 text-[11px]">Tu Hora (Agente):</span>
+                <span className="text-emerald-300 font-bold text-sm">{agentLiveTime}</span>
+
+                {(clientPhone || task?.phone) && (
+                  <span className="text-white/70 text-xs border-l border-white/20 pl-2 ml-0.5 flex items-center gap-1 font-sans">
+                    <Phone className="w-3 h-3 text-cyan-400/80" />
+                    <span className="font-mono font-semibold">{clientPhone || task?.phone}</span>
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <h3 className="text-base font-bold text-white leading-snug truncate">
               {loading ? `Cargando Ticket #${taskId}...` : (task?.name || `Ticket #${taskId}`)}
             </h3>
-            {!loading && task?.name && (
-              <span className="text-xs text-white/40 font-mono block mt-0.5">Ticket ID: #{taskId}</span>
+            {!loading && (
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                <a
+                  href={`https://app.clickup.com/t/${taskId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm group"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-purple-400 group-hover:scale-110 transition-transform" />
+                  Abrir en ClickUp (#{taskId})
+                </a>
+
+                {activeZdId ? (
+                  <a
+                    href={`https://vipcosmetics.zendesk.com/agent/tickets/${activeZdId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm group"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-emerald-400 group-hover:scale-110 transition-transform" />
+                    Abrir en Zendesk (#{activeZdId})
+                  </a>
+                ) : (
+                  <span className="text-[11px] text-amber-400/80 font-mono flex items-center gap-1 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                    <AlertTriangle className="w-3 h-3 text-amber-400" /> Sin ID de Zendesk
+                  </span>
+                )}
+              </div>
             )}
           </div>
           <button 
             onClick={onClose}
-            className="p-2 rounded-xl bg-white/10 border border-white/20 text-white/80 hover:text-white hover:bg-white/20 transition-all cursor-pointer"
+            className="p-2 rounded-xl bg-white/10 border border-white/20 text-white/80 hover:text-white hover:bg-white/20 transition-all cursor-pointer shrink-0 ml-2"
           >
             <X className="w-4 h-4" />
           </button>
@@ -586,6 +755,7 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
         <div className="flex border-b border-white/10 bg-white/5">
           {[
             { id: "actions", label: "Acciones ClickUp" },
+            { id: "zendesk_user", label: "Verificar Usuario Zendesk" },
             { id: "chat", label: "Consultar con Donna IA" },
             { id: "cloning", label: "Duplicar a Reembolsos" }
           ].map(tab => (
@@ -625,16 +795,21 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
 
               {/* Client Info Overview */}
               {!loading && task && (
-                <div className="bg-white/5 border border-white/10 p-4 rounded-xl flex flex-wrap gap-4 items-center justify-between text-xs">
+                <div className="bg-cyan-950/20 border border-cyan-500/20 p-4 rounded-xl flex flex-wrap gap-4 items-center justify-between text-xs">
                   <div className="flex items-center gap-2 font-mono text-white/70">
-                    <Phone className="w-3.5 h-3.5 text-white/40" />
+                    <Phone className="w-3.5 h-3.5 text-cyan-400" />
                     <span>Teléfono:</span>
-                    <span className="text-white font-bold">{task.phone || "No asignado"}</span>
+                    <span className="text-white font-bold">{clientPhone || task.phone || "No asignado"}</span>
                   </div>
                   <div className="flex items-center gap-2 font-mono text-white/70">
-                    <MapPin className="w-3.5 h-3.5 text-white/40" />
+                    <MapPin className="w-3.5 h-3.5 text-cyan-400" />
                     <span>Zona Horaria:</span>
-                    <span className="text-white font-bold">{task.timezone || "EST"}</span>
+                    <span className="text-cyan-300 font-bold">{effectiveTz}</span>
+                  </div>
+                  <div className="flex items-center gap-2 font-mono text-white/70">
+                    <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Hora Local Cliente:</span>
+                    <span className="text-cyan-300 font-bold">{clientLiveTime}</span>
                   </div>
                 </div>
               )}
@@ -682,12 +857,30 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                         />
                       </div>
                       <div className="space-y-1">
-                        <span className="text-[10px] font-bold text-white/50 uppercase block mb-1">ID Ticket Zendesk</span>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-white/50 uppercase block">ID Ticket Zendesk</span>
+                          {activeZdId && (
+                            <a
+                              href={`https://vipcosmetics.zendesk.com/agent/tickets/${activeZdId}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[10px] text-emerald-400 hover:text-emerald-300 hover:underline flex items-center gap-1 font-mono font-bold"
+                            >
+                              <ExternalLink className="w-2.5 h-2.5" /> Abrir
+                            </a>
+                          )}
+                        </div>
                         <input
                           type="text"
                           placeholder="Ej. 123456"
                           value={zendeskTicketId}
-                          onChange={(e) => setZendeskTicketId(e.target.value)}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setZendeskTicketId(val);
+                            if (!ticketNumber || ticketNumber === zendeskTicketId) {
+                              setTicketNumber(val);
+                            }
+                          }}
                           className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/30"
                         />
                       </div>
@@ -704,32 +897,36 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                   {/* Comment Translation Log & Push */}
                   <div className="glass-card p-4 space-y-3.5">
                     <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-white/60 uppercase tracking-wide">Nuevo Log (Se traduce a ClickUp)</label>
-                      <button
-                        onClick={handleNoAnswer}
-                        disabled={submittingAction}
-                        className="px-3 py-1 bg-white/10 hover:bg-white/20 text-white border border-white/15 rounded-lg text-[10px] font-mono tracking-wider font-extrabold cursor-pointer"
-                      >
-                        📞 SIN RESPUESTA MÁQUINA
-                      </button>
+                      <label className="text-xs font-bold text-white/60 uppercase tracking-wide">Nuevo Log (ClickUp / Zendesk)</label>
                     </div>
 
                     <textarea
-                      placeholder="Escribe aquí tu log en español... Donna corregirá tu redacción, lo traducirá a un inglés corporativo preciso y actualizará el ticket en ClickUp en un solo paso."
+                      placeholder="Escribe aquí tu log en español... Donna corregirá tu redacción, lo traducirá a un inglés corporativo preciso y actualizará el ticket en ClickUp y Zendesk en un solo paso."
                       value={spanishComment}
                       onChange={(e) => setSpanishComment(e.target.value)}
                       rows={4}
                       className="w-full bg-white/5 border border-white/15 rounded-xl p-3 text-xs text-white placeholder-white/30 focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all leading-relaxed font-sans"
                     />
 
-                    <div className="flex justify-end">
+                    <div className="flex flex-wrap items-center justify-end gap-2.5">
                       <button
-                        onClick={() => handleLogAndPush()}
+                        onClick={() => handleLogAndPush(spanishComment, true)}
+                        disabled={submittingAction || !spanishComment.trim()}
+                        className="px-4 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 text-xs font-semibold flex items-center gap-2 rounded-xl transition-all cursor-pointer disabled:opacity-40"
+                        title="Envía como nota interna en Zendesk sin registrar hora de respuesta del cliente"
+                      >
+                        <PhoneOff className="w-3.5 h-3.5 text-amber-400" />
+                        Sin Respuesta
+                      </button>
+
+                      <button
+                        onClick={() => handleLogAndPush(spanishComment, false)}
                         disabled={submittingAction || !spanishComment.trim()}
                         className="px-5 py-2.5 bg-white text-slate-950 hover:bg-white/90 text-xs font-bold flex items-center gap-2 rounded-xl transition-all cursor-pointer disabled:opacity-40 shadow-[0_4px_15px_rgba(255,255,255,0.15)]"
+                        title="Guarda el comentario y registra la hora habitual de respuesta del cliente"
                       >
                         {submittingAction ? <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-950" /> : <Send className="w-3.5 h-3.5 text-slate-950" />}
-                        Traducir y Guardar
+                        Cliente Respondió
                       </button>
                     </div>
                   </div>
@@ -781,7 +978,7 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                         <input
                           type="text"
                           placeholder="ej. M10502"
-                          value={ticketNumber}
+                          value={ticketNumber || zendeskTicketId}
                           onChange={(e) => setTicketNumber(e.target.value)}
                           className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-white/35 focus:outline-none focus:border-rose-400"
                         />
@@ -807,6 +1004,17 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                       Cerrar Ticket Permanentemente
                     </button>
                   </div>
+                </div>
+              )}
+
+              {/* Tab: Zendesk User Checker */}
+              {activeSubTab === "zendesk_user" && (
+                <div className="glass-card p-5 rounded-2xl border border-white/10">
+                  <ZendeskUserChecker
+                    initialPhone={clientPhone}
+                    initialName={task?.name}
+                    isModalMode={true}
+                  />
                 </div>
               )}
 
@@ -934,24 +1142,79 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
               ) : (
                 <>
                   <div className="space-y-3.5">
+                    {/* Huso de Referencia selector */}
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-white/50 uppercase tracking-wide">Fecha de la llamada</label>
-                      <input
-                        type="date"
-                        value={scheduleDate}
-                        onChange={(e) => setScheduleDate(e.target.value)}
-                        className="w-full bg-white/5 border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
-                      />
+                      <label className="text-[10px] font-bold text-white/50 uppercase tracking-wide">La hora que ingresarás corresponde a:</label>
+                      <div className="grid grid-cols-2 gap-2 bg-white/5 p-1 rounded-xl border border-white/10 text-xs font-mono">
+                        <button
+                          type="button"
+                          onClick={() => setScheduleRefMode("agent")}
+                          className={`py-1.5 px-2 rounded-lg text-center transition-all cursor-pointer font-bold ${
+                            scheduleRefMode === "agent"
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm"
+                              : "text-white/60 hover:text-white"
+                          }`}
+                        >
+                          👤 Tu Hora (Agente)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setScheduleRefMode("client")}
+                          className={`py-1.5 px-2 rounded-lg text-center transition-all cursor-pointer font-bold ${
+                            scheduleRefMode === "client"
+                              ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm"
+                              : "text-white/60 hover:text-white"
+                          }`}
+                        >
+                          📞 Hora Cliente ({effectiveTz})
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-white/50 uppercase tracking-wide">Hora (Huso Local del Sistema)</label>
-                      <input
-                        type="time"
-                        value={scheduleTime}
-                        onChange={(e) => setScheduleTime(e.target.value)}
-                        className="w-full bg-white/5 border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
-                      />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-white/50 uppercase tracking-wide">Fecha de la llamada</label>
+                        <input
+                          type="date"
+                          value={scheduleDate}
+                          onChange={(e) => setScheduleDate(e.target.value)}
+                          className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-white/50 uppercase tracking-wide">
+                          Hora ({scheduleRefMode === "agent" ? "Tu Hora Local" : `Cliente ${effectiveTz}`})
+                        </label>
+                        <input
+                          type="time"
+                          value={scheduleTime}
+                          onChange={(e) => setScheduleTime(e.target.value)}
+                          className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Previsualización en Tiempo Real de Ambas Horas */}
+                    <div className="bg-cyan-950/40 border border-cyan-500/30 rounded-xl p-3 space-y-2">
+                      <div className="text-[10px] font-bold text-cyan-400/90 uppercase tracking-wider flex items-center justify-between">
+                        <span>Previsualización de Horario Conversión en Vivo</span>
+                        <span className="text-[9px] text-white/40 normal-case font-mono">(Ajuste de Horario Verano/Invierno Automático)</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs font-mono pt-1">
+                        <span className="text-white/70 flex items-center gap-1.5">
+                          <User className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Tu Hora de Agente:</span>
+                        </span>
+                        <span className="text-emerald-300 font-bold">{previewAgentTimeStr}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs font-mono border-t border-white/10 pt-1.5">
+                        <span className="text-white/70 flex items-center gap-1.5">
+                          <Phone className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>Hora Cliente ({effectiveTz}):</span>
+                        </span>
+                        <span className="text-cyan-300 font-bold">{previewClientTimeStr}</span>
+                      </div>
                     </div>
                   </div>
 

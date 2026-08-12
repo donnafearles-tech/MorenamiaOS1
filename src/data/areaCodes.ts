@@ -104,3 +104,75 @@ export function getStateByPhone(phone: string | null | undefined): string | null
   
   return null;
 }
+
+export const stateToTimezone: Record<string, string> = {
+  "Alabama": "CST",
+  "Alaska": "AKST",
+  "American Samoa": "SST",
+  "Arizona": "PHX",
+  "Arkansas": "CST",
+  "California": "PST",
+  "Colorado": "MST",
+  "Connecticut": "EST",
+  "Delaware": "EST",
+  "Florida": "EST",
+  "Georgia": "EST",
+  "Guam": "ChST",
+  "Hawaii": "HST",
+  "Idaho": "MST",
+  "Illinois": "CST",
+  "Indiana": "EST",
+  "Iowa": "CST",
+  "Kansas": "CST",
+  "Kentucky": "EST",
+  "Louisiana": "CST",
+  "Maine": "EST",
+  "Maryland": "EST",
+  "Massachusetts": "EST",
+  "Michigan": "EST",
+  "Minnesota": "CST",
+  "Mississippi": "CST",
+  "Missouri": "CST",
+  "Montana": "MST",
+  "Nebraska": "CST",
+  "Nevada": "PST",
+  "New Hampshire": "EST",
+  "New Jersey": "EST",
+  "New Mexico": "MST",
+  "New York": "EST",
+  "North Carolina": "EST",
+  "North Dakota": "CST",
+  "Northern Mariana Islands": "ChST",
+  "Ohio": "EST",
+  "Oklahoma": "CST",
+  "Oregon": "PST",
+  "Pennsylvania": "EST",
+  "Puerto Rico": "AST",
+  "Rhode Island": "EST",
+  "South Carolina": "EST",
+  "South Dakota": "CST",
+  "Tennessee": "CST",
+  "Texas": "CST",
+  "Utah": "MST",
+  "Vermont": "EST",
+  "Virgin Islands": "AST",
+  "Virginia": "EST",
+  "Washington": "PST",
+  "Washington, DC": "EST",
+  "West Virginia": "EST",
+  "Wisconsin": "CST",
+  "Wyoming": "MST"
+};
+
+/**
+ * Derives the timezone tag (e.g., PST, EST, CST, MST, PHX, AKST, HST, AST)
+ * directly from a client's phone number area code.
+ */
+export function getTimezoneByPhone(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const state = getStateByPhone(phone);
+  if (state && stateToTimezone[state]) {
+    return stateToTimezone[state];
+  }
+  return null;
+}

@@ -6,6 +6,7 @@ export interface Task {
   due_date?: string;
   local_time?: string;
   tz_tag?: string;
+  phone?: string;
   answered_at?: string;
   priority?: string;
 }

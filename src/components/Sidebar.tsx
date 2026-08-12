@@ -10,7 +10,8 @@ import {
   Sparkles,
   ClipboardList,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  UserCheck
 } from "lucide-react";
 
 interface SidebarProps {
@@ -52,6 +53,7 @@ export default function Sidebar({ activeTab, setActiveTab, userEmail, tasksCount
     { id: "ai-search", label: "Buscador Donna IA", icon: Search, color: "text-cyan-400" },
     { id: "refund-list", label: "Lista de Reembolsos", icon: ClipboardList, color: "text-rose-400" },
     { id: "disputes-sync", label: "Sincronizar Disputas", icon: RefreshCw, color: "text-emerald-400" },
+    { id: "zendesk-check", label: "Verificar Zendesk", icon: UserCheck, color: "text-emerald-400" },
     { id: "metrics", label: "Métricas y Diagnóstico", icon: BarChart2, color: "text-blue-400" },
   ];
 

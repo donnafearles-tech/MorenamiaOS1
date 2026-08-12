@@ -19,8 +19,14 @@ import {
   Search,
   Settings,
   Key,
-  Check
+  Check,
+  Download,
+  Folder,
+  Package,
+  UserCheck,
+  X
 } from "lucide-react";
+import ZendeskUserChecker from "./ZendeskUserChecker";
 
 interface NewCaseFormProps {
   onCaseCreated: () => void;
@@ -45,6 +51,7 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
   const [zendeskTicketId, setZendeskTicketId] = useState("");
   const [email, setEmail] = useState("");
   const [storeLocation, setStoreLocation] = useState("");
+  const [showZendeskChecker, setShowZendeskChecker] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [createdUrl, setCreatedUrl] = useState<string | null>(null);
@@ -53,6 +60,8 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
   const [isSearchingSharefile, setIsSearchingSharefile] = useState(false);
   const [sharefileError, setSharefileError] = useState<string | null>(null);
   const [sharefileSuccess, setSharefileSuccess] = useState<string | null>(null);
+  const [locatedFolderFiles, setLocatedFolderFiles] = useState<any[]>([]);
+  const [locatedFolderZipUrl, setLocatedFolderZipUrl] = useState<string | null>(null);
   const [sharefileValidation, setSharefileValidation] = useState<{
     invoice?: boolean;
     saleDate?: boolean;
@@ -215,8 +224,41 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
     setIsSearchingSharefile(true);
     setSharefileError(null);
     setSharefileSuccess(null);
+    setLocatedFolderFiles([]);
+    setLocatedFolderZipUrl(null);
 
     try {
+      // 1. Intentar la localización quirúrgica con el Sistema de 2 Consultas
+      const sfSearchRes = await fetch("/api/sharefile/search-folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          invoice: invoice.trim(),
+          name: name.trim(),
+          saleDate: saleDate.trim(),
+          storeLocation: storeLocation.trim()
+        })
+      });
+
+      if (sfSearchRes.ok) {
+        const folderData = await sfSearchRes.json();
+        if (folderData.success && folderData.url) {
+          setSharefileLink(folderData.url);
+          if (folderData.files && folderData.files.length > 0) {
+            setLocatedFolderFiles(folderData.files);
+          }
+          if (folderData.zipDownloadUrl) {
+            setLocatedFolderZipUrl(folderData.zipDownloadUrl);
+          }
+          setSharefileSuccess(
+            `✅ ¡Carpeta y archivos localizados con éxito para la factura "${invoice}"!`
+          );
+          setIsSearchingSharefile(false);
+          return;
+        }
+      }
+
+      // Fallback a /api/sharefile/items si no hubo respuesta directa
       const response = await fetch(
         `/api/sharefile/items?search=${encodeURIComponent(invoice.trim())}&saleDate=${encodeURIComponent(saleDate.trim())}&storeLocation=${encodeURIComponent(storeLocation.trim())}&clientName=${encodeURIComponent(name.trim())}`
       );
@@ -542,7 +584,6 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
     setCreatedUrl(null);
 
     try {
-      const zapierToken = localStorage.getItem("ZAPIER_MCP_TOKEN") || "";
       const res = await fetch("/api/create-ticket", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -561,7 +602,6 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
           zendesk_ticket_id: zendeskTicketId,
           email,
           store_location: storeLocation,
-          zapier_token: zapierToken,
           seller_id: seller,
           region_id: region,
           store_id: storeId,
@@ -787,6 +827,18 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
             <span className="text-[10px] text-white/45 font-mono tracking-wide block">
               💡 Se detectará automáticamente el huso horario por código de área estadounidense.
             </span>
+          </div>
+
+          {/* Zendesk User Verification Quick Action */}
+          <div className="md:col-span-2">
+            <button
+              type="button"
+              onClick={() => setShowZendeskChecker(true)}
+              className="w-full py-2.5 px-4 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm hover:shadow"
+            >
+              <UserCheck className="w-4 h-4 text-emerald-400" />
+              Verificar si este cliente ya existe en Zendesk
+            </button>
           </div>
 
           {/* Región / Region */}
@@ -1196,6 +1248,61 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
               )}
             </div>
           )}
+
+          {/* Archivos Encontrados en la Carpeta Contenedora */}
+          {locatedFolderFiles.length > 0 && (
+            <div className="mt-3 p-3.5 bg-slate-900/90 border border-emerald-500/30 rounded-xl space-y-3 shadow-lg">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <Folder className="w-4 h-4 text-emerald-400" />
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">
+                    Archivos en Carpeta Contenedora ({locatedFolderFiles.length})
+                  </span>
+                </div>
+                {locatedFolderZipUrl && (
+                  <a
+                    href={locatedFolderZipUrl}
+                    download
+                    className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20 cursor-pointer"
+                    title="Descargar todos los archivos de esta carpeta en un archivo .ZIP"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Descargar Todos (ZIP)</span>
+                  </a>
+                )}
+              </div>
+
+              <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                {locatedFolderFiles.map((file: any, index: number) => {
+                  const fileDownloadUrl = file.downloadUrl || `/api/sharefile/download-file/${file.Id}?name=${encodeURIComponent(file.Name || 'archivo')}`;
+                  const sizeKb = file.FileSizeBytes ? (file.FileSizeBytes / 1024).toFixed(1) + " KB" : file.size ? (file.size / 1024).toFixed(1) + " KB" : "";
+                  return (
+                    <div
+                      key={file.Id || index}
+                      className="flex items-center justify-between p-2.5 bg-white/5 hover:bg-white/10 rounded-lg border border-white/5 text-xs text-white/90 transition-all gap-2"
+                    >
+                      <div className="flex items-center gap-2 overflow-hidden flex-1 min-w-0">
+                        <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span className="truncate text-xs font-mono text-white/90" title={file.Name || file.name}>
+                          {file.Name || file.name}
+                        </span>
+                        {sizeKb && <span className="text-[10px] text-white/40 shrink-0">({sizeKb})</span>}
+                      </div>
+                      <a
+                        href={fileDownloadUrl}
+                        download
+                        className="px-3 py-1 bg-white/10 hover:bg-emerald-500 text-white hover:text-slate-950 rounded-md text-[11px] font-bold transition-all shrink-0 flex items-center gap-1 cursor-pointer"
+                        title={`Descargar ${file.Name || file.name}`}
+                      >
+                        <Download className="w-3 h-3" />
+                        <span>Descargar</span>
+                      </a>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <p className="text-[10px] text-white/40 font-sans mt-1">
             Ingresa el número de factura arriba y haz clic en "Buscar Carpeta" para vincular automáticamente la carpeta de Citrix ShareFile.
           </p>
@@ -1251,6 +1358,31 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
         </div>
 
       </form>
+
+      {/* Modal for Zendesk User Verification */}
+      {showZendeskChecker && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-white/20 rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto relative shadow-2xl">
+            <button
+              onClick={() => setShowZendeskChecker(false)}
+              className="absolute top-4 right-4 p-2 text-white/60 hover:text-white bg-white/10 hover:bg-white/20 rounded-xl transition-all cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <ZendeskUserChecker
+              initialEmail={email}
+              initialPhone={phone}
+              initialName={name}
+              isModalMode={true}
+              onSelectUser={(u) => {
+                if (u.email && !email) setEmail(u.email);
+                if (u.phone && !phone) setPhone(u.phone);
+                setShowZendeskChecker(false);
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

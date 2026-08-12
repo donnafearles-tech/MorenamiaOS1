@@ -262,3 +262,72 @@ export async function searchShareFileByInvoice(
     };
   }
 }
+
+/**
+ * Busca la carpeta contenedora exacta en ShareFile dada una factura, nombre, fecha y sucursal.
+ * Devuelve la URL de la carpeta, los archivos contenidos y el enlace para descargar el ZIP.
+ */
+export async function locateShareFileFolder(params: {
+  invoice: string;
+  name?: string;
+  saleDate?: string;
+  storeLocation?: string;
+}): Promise<{
+  success: boolean;
+  url?: string;
+  folder?: any;
+  files?: any[];
+  zipDownloadUrl?: string;
+  warnings?: string[];
+  message?: string;
+}> {
+  try {
+    const res = await fetch("/api/sharefile/search-folder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params)
+    });
+
+    const data = await res.json();
+    return data;
+  } catch (err: any) {
+    console.error("[ShareFile Service] Error localizando carpeta de ShareFile:", err.message);
+    return {
+      success: false,
+      message: `Error de conexión al servidor: ${err.message}`
+    };
+  }
+}
+
+/**
+ * Obtiene la lista de archivos dentro de una carpeta de ShareFile especificada por ID.
+ */
+export async function getFolderFiles(folderId: string): Promise<{
+  success: boolean;
+  files?: any[];
+  zipDownloadUrl?: string;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/sharefile/folder-files/${encodeURIComponent(folderId)}`);
+    return await res.json();
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Obtiene la URL para descargar un archivo individual.
+ */
+export function getFileDownloadUrl(itemId: string, fileName?: string): string {
+  const cleanId = itemId.replace(/^fida/, "").replace(/^fo/, "");
+  return `/api/sharefile/download-file/${cleanId}${fileName ? `?name=${encodeURIComponent(fileName)}` : ""}`;
+}
+
+/**
+ * Obtiene la URL para descargar todos los archivos de una carpeta en formato ZIP.
+ */
+export function getFolderZipDownloadUrl(folderId: string, invoice?: string): string {
+  const cleanId = folderId.replace(/^fo/, "");
+  return `/api/sharefile/download-folder-zip/${cleanId}${invoice ? `?invoice=${encodeURIComponent(invoice)}` : ""}`;
+}

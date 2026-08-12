@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Task } from "../types";
+import { getTimezoneByPhone } from "../data/areaCodes";
 import { 
   Clock, 
   RotateCw, 
@@ -27,7 +28,7 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
   const [rotation, setRotation] = useState(0);
   const [selectedFilter, setSelectedFilter] = useState<string>("TODOS");
   const [viewMode, setViewMode] = useState<"wheel" | "grid">("wheel");
-  const [sortBy, setSortBy] = useState<"priority" | "timezone">("priority");
+  const [sortBy, setSortBy] = useState<"priority" | "timezone" | "answered_time">("priority");
   const [time, setTime] = useState(new Date());
 
   // Update live clock every second
@@ -51,6 +52,16 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
     "PST": "Pacífico (LA/LV)",
     "AKST": "Alaska",
     "HST": "Hawái"
+  };
+
+  // Resolve timezone tag (from task.tz_tag or calculated from phone area code)
+  const resolveTzTag = (task: Partial<Task>) => {
+    if (task.tz_tag) return task.tz_tag;
+    if (task.phone) {
+      const derived = getTimezoneByPhone(task.phone);
+      if (derived) return derived;
+    }
+    return "EST";
   };
 
   // Helper to format live local time based on timezone tag
@@ -191,7 +202,7 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
   // Filtering tasks
   const filteredTasks = tasks.filter(t => isTaskInFilter(t, selectedFilter));
 
-  // Sorting tasks by chosen criteria (priority vs timezone)
+  // Sorting tasks by chosen criteria (priority vs timezone vs answered_time)
   const sortedTasks = [...filteredTasks].sort((a, b) => {
     if (sortBy === "priority") {
       const rankA = getPriorityInfo(a.priority).rank;
@@ -199,6 +210,15 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
       if (rankA !== rankB) {
         return rankA - rankB;
       }
+    } else if (sortBy === "answered_time") {
+      // Put tasks with recorded answer times first
+      if (a.answered_at && !b.answered_at) return -1;
+      if (!a.answered_at && b.answered_at) return 1;
+      if (a.answered_at && b.answered_at) {
+        // Sort by timestamp (chronological answer order)
+        return new Date(b.answered_at).getTime() - new Date(a.answered_at).getTime();
+      }
+      return 0;
     }
     // Fallback/Default is the backend-provided timezone sorting
     return 0;
@@ -267,7 +287,7 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
         {/* Sorting Toggles + View Mode Toggles */}
         <div className="flex flex-wrap items-center gap-3 self-stretch lg:self-auto justify-between lg:justify-end">
           {/* Sorting Control */}
-          <div className="flex items-center gap-1 p-1 bg-white/5 border border-white/15 rounded-xl">
+          <div className="flex flex-wrap items-center gap-1 p-1 bg-white/5 border border-white/15 rounded-xl">
             <button
               onClick={() => setSortBy("priority")}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
@@ -285,6 +305,15 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
               title="Ordenar por huso horario (Este a Oeste)"
             >
               <MapPin className="w-3.5 h-3.5 text-cyan-400" /> Husos Horarios
+            </button>
+            <button
+              onClick={() => setSortBy("answered_time")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                sortBy === "answered_time" ? "bg-white/15 text-white border border-white/20" : "text-white/40 hover:text-white"
+              }`}
+              title="Ordenar por hora en que contesta el cliente"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Hora Respuesta
             </button>
           </div>
 
@@ -362,10 +391,14 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
                     nodeColor = "bg-rose-500/25 backdrop-blur-lg border-rose-400/40 text-white shadow-[0_0_15px_rgba(244,63,94,0.3)] animate-pulse border";
                   }
 
+                  const tz = resolveTzTag(task);
+                  const clientLiveTime = getLiveLocalTime(tz);
+
                   return (
                     <button
                       key={task.id}
                       onClick={() => onSelectTask(task.id)}
+                      title={`Caso: ${task.name} | Teléfono: ${task.phone || "No asignado"} | Hora local cliente: ${clientLiveTime} (${tz})`}
                       className={`absolute w-18 h-18 rounded-full border flex flex-col items-center justify-center transition-all duration-300 hover:scale-110 cursor-pointer z-10 ${nodeColor}`}
                       style={{
                         left: `calc(50% + ${x}px - 2.25rem)`,
@@ -376,8 +409,11 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
                       <span className="text-[10px] font-bold font-mono tracking-tight text-center truncate w-14">
                         {task.name.split("-")[0]?.trim().slice(0, 10) || "CASO"}
                       </span>
-                      <span className="text-[8px] font-semibold text-white/60 font-mono mt-0.5">
-                        {task.tz_tag || "EST"}
+                      <span className="text-[8px] font-bold text-cyan-300 font-mono mt-0.5 leading-none">
+                        {clientLiveTime.split(":")[0]}:{clientLiveTime.split(":")[1]} {clientLiveTime.slice(-2)}
+                      </span>
+                      <span className="text-[7px] font-semibold text-white/50 font-mono">
+                        {tz}
                       </span>
                       {isDeadline && (
                         <div className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 rounded-full border border-slate-900 flex items-center justify-center animate-bounce shadow-md">
@@ -394,7 +430,7 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
           {/* Detailed Bento list of active tasks on the right */}
           <div className="lg:col-span-5 space-y-4 max-h-[500px] overflow-y-auto pr-2">
             <div className="flex items-center justify-between px-2">
-              <span className="text-xs font-bold text-white/60 uppercase tracking-wider">Orden de Trabajo ({sortBy === "priority" ? "Prioridad" : "Huso Horario"})</span>
+              <span className="text-xs font-bold text-white/60 uppercase tracking-wider">Orden de Trabajo ({sortBy === "priority" ? "Prioridad" : sortBy === "timezone" ? "Huso Horario" : "Hora Respuesta"})</span>
               <button 
                 onClick={rotate}
                 className="text-xs font-semibold text-white/80 hover:text-white flex items-center gap-1 transition-all"
@@ -442,17 +478,28 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
 
                       <div className="min-w-0 flex-1">
                         {/* Hour/Time at the top of details */}
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-mono text-white/50 mb-1">
-                          <span className="flex items-center gap-1 text-cyan-400 font-bold bg-cyan-950/40 px-1.5 py-0.5 rounded border border-cyan-500/15">
-                            <Clock className="w-3 h-3 text-cyan-300" />
-                            {getLiveLocalTime(task.tz_tag)}
-                          </span>
-                          <span className="text-white/20">|</span>
-                          <span className="flex items-center gap-1 text-white/70">
-                            <MapPin className="w-3 h-3 text-white/40" />
-                            {task.tz_tag || "EST"}
-                          </span>
-                        </div>
+                        {(() => {
+                          const currentTz = resolveTzTag(task);
+                          return (
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-mono text-white/50 mb-1">
+                              <span className="flex items-center gap-1 text-cyan-400 font-bold bg-cyan-950/40 px-1.5 py-0.5 rounded border border-cyan-500/15">
+                                <Clock className="w-3 h-3 text-cyan-300" />
+                                {getLiveLocalTime(currentTz)}
+                              </span>
+                              <span className="text-white/20">|</span>
+                              <span className="flex items-center gap-1 text-white/70">
+                                <MapPin className="w-3 h-3 text-white/40" />
+                                {currentTz} ({tzMap[currentTz] || "USA"})
+                              </span>
+                              {task.phone && (
+                                <>
+                                  <span className="text-white/20">|</span>
+                                  <span className="text-white/40">{task.phone}</span>
+                                </>
+                              )}
+                            </div>
+                          );
+                        })()}
 
                         <h4 className="text-sm font-bold text-white truncate group-hover:text-white transition-colors">
                           {task.name}
@@ -548,14 +595,14 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
                       <span className="text-white/60">Cliente Local:</span>
                       <span className="font-mono font-bold text-white flex items-center gap-1.5">
                         <Clock className="w-3.5 h-3.5" />
-                        {getLiveLocalTime(task.tz_tag)}
+                        {getLiveLocalTime(resolveTzTag(task))}
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-white/60">Región:</span>
                       <span className="font-mono text-white/80 flex items-center gap-1.5">
                         <MapPin className="w-3.5 h-3.5 text-white/40" />
-                        {task.tz_tag || "EST"} ({tzMap[task.tz_tag || "EST"] || "USA"})
+                        {resolveTzTag(task)} ({tzMap[resolveTzTag(task)] || "USA"})
                       </span>
                     </div>
                     {task.answered_at && (() => {

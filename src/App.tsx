@@ -8,6 +8,7 @@ import DisputesSync from "./components/DisputesSync";
 import RefundsList from "./components/RefundsList";
 import MetricsPanel from "./components/MetricsPanel";
 import TaskDetailModal from "./components/TaskDetailModal";
+import ZendeskUserChecker from "./components/ZendeskUserChecker";
 import { Task } from "./types";
 import { Loader2 } from "lucide-react";
 
@@ -85,6 +86,8 @@ export default function App() {
         return <DisputesSync />;
       case "refund-list":
         return <RefundsList />;
+      case "zendesk-check":
+        return <ZendeskUserChecker />;
       case "metrics":
         return <MetricsPanel />;
       default:
