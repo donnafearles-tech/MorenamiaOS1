@@ -1,0 +1,160 @@
+{
+  "trigger": {
+    "event": "resolution_changed",
+    "location": "Customer Service",
+    "fieldsWatched": ["RESOLUTION", "REASON", "comments"]
+  },
+  "inputs": {
+    "resolution": "string",
+    "reason": "string",
+    "comments": [
+      {
+        "author": "string",
+        "createdAt": "datetime",
+        "text": "string"
+      }
+    ],
+    "lastCustomerReplyAt": "datetime | null",
+    "lastAgentReplyAt": "datetime | null"
+  },
+  "output": {
+    "value": "OK | CHECK"
+  },
+  "rules": [
+    {
+      "id": "DISPUTE_PREMATURE",
+      "title": "Posible Disputa Prematura",
+      "description": "La resolución se estableció como DISPUTE pero los comentarios no incluyen evidencia clara de disputa bancaria/chargeback o el cliente aún está en conversación.",
+      "if": {
+        "resolutionEquals": "DISPUTE",
+        "and": [
+          { "notContainsInComments": ["chargeback", "bank dispute", "disputa bancaria", "charge back", "dispute filed", "bank claim"] },
+          { "or": [
+            { "customerStillInConversation": true },
+            { "noClearEvidenceOfBankCase": true }
+          ] }
+        ]
+      },
+      "then": { "status": "CHECK" }
+    },
+    {
+      "id": "RESOLVED_WITHOUT_CUSTOMER_CONFIRMATION",
+      "title": "Resuelto sin Confirmación del Cliente",
+      "description": "Se marcó RESOLVED pero el cliente nunca respondió confirmando aceptación. Si el cliente dejó de responder tras expresar inconformidad, la resolución correcta es LOST LEAD, no RESOLVED.",
+      "if": {
+        "resolutionEquals": "RESOLVED",
+        "and": [
+          { "noCustomerAcceptancePhrase": true },
+          { "customerStoppedResponding": true },
+          { "daysSinceLastCustomerReply": { "gte": 3 } }
+        ]
+      },
+      "then": { "status": "CHECK", "suggestedResolution": "LOST LEAD" }
+    },
+    {
+      "id": "NO_CUSTOMER_AGREEMENT_FOR_GIFT_REFUND_RESOLVED",
+      "title": "Falta Aceptación del Cliente",
+      "description": "Se eligió GIFT, REFUND o RESOLVED sin frases explícitas de aceptación o satisfacción del cliente en la conversación.",
+      "if": {
+        "resolutionIn": ["GIFT", "REFUND", "RESOLVED"],
+        "and": [
+          { "noCustomerAcceptancePhrase": true }
+        ]
+      },
+      "then": { "status": "CHECK" }
+    },
+    {
+      "id": "LOST_LEAD_TOO_EARLY",
+      "title": "Lost Lead Prematuro",
+      "description": "Se estableció LOST LEAD pero han pasado menos de 3 días desde la última respuesta o no hay registro de mensaje de aviso/deadline enviado.",
+      "if": {
+        "resolutionEquals": "LOST LEAD",
+        "or": [
+          { "daysSinceLastCustomerReply": { "lt": 3 } },
+          { "noDeadlineOrClosureMessage": true }
+        ]
+      },
+      "then": { "status": "CHECK" }
+    },
+    {
+      "id": "REFUND_WITHOUT_APPROVAL",
+      "title": "Reembolso sin Aprobación Interna / Aceptación",
+      "description": "Resolución de REFUND registrada pero no consta aprobación interna de finanzas en los logs o falta confirmación de aceptación del cliente.",
+      "if": {
+        "resolutionEquals": "REFUND",
+        "or": [
+          { "noInternalApprovalInComments": true },
+          { "noCustomerRefundAcceptance": true }
+        ]
+      },
+      "then": { "status": "CHECK" }
+    },
+    {
+      "id": "RESOLVED_WITH_PENDING_ACTIONS",
+      "title": "Resuelto con Acciones Pendientes",
+      "description": "Marcado como RESOLVED pero el último mensaje fue del cliente sin seguimiento o hay acciones operativas pendientes.",
+      "if": {
+        "resolutionEquals": "RESOLVED",
+        "or": [
+          { "pendingActionsDetected": true },
+          { "lastMessageFromCustomerWithoutFollowup": true }
+        ]
+      },
+      "then": { "status": "CHECK" }
+    },
+    {
+      "id": "REASON_INCONSISTENT",
+      "title": "Motivo Inconsistente con el Caso",
+      "description": "El motivo está registrado como 'deffective' pero las notas sugieren categorías de GBK, Shalem, First Sale Refund o Arrepentimiento.",
+      "if": {
+        "reasonEquals": "deffective",
+        "and": [
+          { "commentsImplyCategoryIn": ["GBK", "Shalem", "First Sale Refund", "Regret"] }
+        ]
+      },
+      "then": { "status": "CHECK" }
+    },
+    {
+      "id": "GHOSTED_IS_NOT_RESOLVED",
+      "title": "Cliente Ghosteó ≠ Resuelto",
+      "description": "El cliente dejó de responder después de expresar inconformidad con el producto/servicio/cobro. Sin confirmación explícita del cliente, esto NO es RESOLVED. Debe ser LOST LEAD (si no hay disputa bancaria) o DISPUTE (solo si hay evidencia de chargeback).",
+      "if": {
+        "resolutionEquals": "RESOLVED",
+        "and": [
+          { "customerExpressedDissatisfaction": true },
+          { "customerStoppedResponding": true },
+          { "noExplicitCustomerAcceptance": true }
+        ]
+      },
+      "then": { "status": "CHECK", "suggestedResolution": "LOST LEAD", "note": "Solo cambiar a DISPUTE si hay evidencia de chargeback o disputa bancaria formal en comentarios o tareas relacionadas." }
+    },
+    {
+      "id": "MISSING_CONTEXT",
+      "title": "Contexto Insuficiente",
+      "description": "Los comentarios e historial del caso no contienen suficiente contexto o detalle para justificar la resolución elegida.",
+      "if": {
+        "insufficientContextToJustifyResolution": true
+      },
+      "then": { "status": "CHECK" }
+    }
+  ],
+  "correctionGuidelines": {
+    "description": "Guía para corregir las 34 tareas asignadas a Donna Zavala con resolución RESOLVED que probablemente están mal clasificadas.",
+    "criteria": {
+      "mustBeTrue": [
+        "El cliente dejó de responder sin confirmar aceptación",
+        "No hay frase explícita de acuerdo del cliente en comentarios",
+        "Se enviaron mensajes de seguimiento sin respuesta por 3+ días"
+      ],
+      "action": "Cambiar RESOLUTION de RESOLVED a LOST LEAD",
+      "exceptions": [
+        "Si hay evidencia de chargeback → DISPUTE",
+        "Si el cliente aceptó explícitamente antes de dejar de responder → mantener RESOLVED",
+        "Si se entregó producto/regalo y el cliente lo recibió sin queja → mantener RESOLVED o GIFT"
+      ]
+    }
+  },
+  "fallback": {
+    "ifNoRuleMatches": { "status": "OK" }
+  }
+}

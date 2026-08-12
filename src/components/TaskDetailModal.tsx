@@ -20,9 +20,13 @@ import {
   PhoneOff,
   Save,
   User,
-  UserCheck
+  UserCheck,
+  Bot,
+  ArrowRight
 } from "lucide-react";
 import ZendeskUserChecker from "./ZendeskUserChecker";
+import RileyToast from "./RileyToast";
+import { evaluateRileyResolution, RileyEvaluationResult } from "../services/rileyAgent";
 
 interface TaskDetailModalProps {
   taskId: string;
@@ -61,8 +65,82 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
   const [scheduleSuccess, setScheduleSuccess] = useState(false);
 
   // State for Closure
-  const [resolutionId, setResolutionId] = useState("ce10b2a1-fa41-4776-bebe-0814d45be7ea"); // Default REFUND
+  const [resolutionId, setResolutionId] = useState("550d1479-412d-45f9-b7da-64cd69473af1"); // Default RESOLVED
   const [closureComment, setClosureComment] = useState("");
+
+  // State for Riley Agent Evaluation
+  const [rileyEvaluation, setRileyEvaluation] = useState<RileyEvaluationResult | null>(null);
+  const [showRileyToast, setShowRileyToast] = useState(false);
+
+  // Evaluate Riley Rules whenever resolution, closureComment or spanishComment changes
+  useEffect(() => {
+    if (!task) return;
+
+    const currentComments = [
+      closureComment,
+      spanishComment,
+      ...(task.comments || []).map((c: any) => typeof c === "string" ? c : c.text || c.comment_text || "")
+    ].filter(Boolean);
+
+    const evalResult = evaluateRileyResolution({
+      resolution: resolutionId,
+      reason: task.reason || task.category || "",
+      comments: currentComments,
+      taskName: task.name || ""
+    });
+
+    setRileyEvaluation(evalResult);
+    if (evalResult.status === "CHECK") {
+      setShowRileyToast(true);
+    } else {
+      setShowRileyToast(false);
+    }
+  }, [resolutionId, task, closureComment, spanishComment]);
+
+  const handleApplySuggestedResolution = async (suggested: string) => {
+    let targetId = "";
+    let targetName = suggested;
+
+    const match = resolutions.find(r => r.name.toUpperCase().includes(suggested.toUpperCase()));
+    if (match) {
+      targetId = match.id;
+      targetName = match.name;
+    } else {
+      const idMap: Record<string, string> = {
+        "LOST LEAD": "49bb94ed-70b8-4d8f-80ae-8b4f8ab9b04e",
+        "DISPUTE": "a148c4e2-b2f3-4b6d-9cf6-6eb8255c6099",
+        "REFUND": "e9367f41-cb3b-42f0-b612-6528d02098dc",
+        "GIFT": "94dad466-99f5-4f62-b6a1-f7d0a567ffae",
+        "RESOLVED": "550d1479-412d-45f9-b7da-64cd69473af1"
+      };
+      if (idMap[suggested]) {
+        targetId = idMap[suggested];
+      }
+    }
+
+    if (targetId) {
+      setResolutionId(targetId);
+      showToast?.(`🔄 Cambiando resolución a ${targetName} en ClickUp...`, "info");
+
+      if (taskId) {
+        try {
+          const res = await fetch("/api/update-resolution", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task_id: taskId, resolution_id: targetId })
+          });
+          const data = await res.json();
+          if (res.ok && data.success) {
+            showToast?.(`✅ Resolución cambiada a ${targetName} en ClickUp exitosamente.`, "success");
+          } else {
+            showToast?.(`⚠️ Cambiada localmente. Error ClickUp: ${data.error || 'Error desconocido'}`, "info");
+          }
+        } catch (err: any) {
+          showToast?.(`⚠️ Cambiada localmente. Error de conexión: ${err.message}`, "info");
+        }
+      }
+    }
+  };
 
   // State for Cloning
   const [cloneMethod, setCloneMethod] = useState("CHECK");
@@ -275,6 +353,7 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
 
   // Fetch Task Data from ClickUp via our local API route (we can use AI Search or fetch directly if needed, let's query our backend)
   useEffect(() => {
+    if (!taskId) return;
     fetchTaskDetails();
   }, [taskId]);
 
@@ -284,7 +363,21 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
     }
   }, [chatMessages]);
 
+  const safeParseResponse = async (res: Response, fallback: any = {}) => {
+    try {
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        return await res.json();
+      }
+      const text = await res.text();
+      return JSON.parse(text);
+    } catch {
+      return fallback;
+    }
+  };
+
   const fetchTaskDetails = async () => {
+    if (!taskId) return;
     setLoading(true);
     try {
       const [detailsRes, chatRes] = await Promise.all([
@@ -298,12 +391,12 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
 
       let detailsData = { name: `Ticket #${taskId}`, description: "", phone: "", timezone: "EST", zendesk_ticket_id: "" };
       if (detailsRes.ok) {
-        detailsData = await detailsRes.json();
+        detailsData = await safeParseResponse(detailsRes, detailsData);
       }
 
       let chatData = { answer: "No se pudo obtener el resumen de Donna IA." };
       if (chatRes.ok) {
-        chatData = await chatRes.json();
+        chatData = await safeParseResponse(chatRes, chatData);
       }
 
       setTask({
@@ -313,8 +406,14 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
         phone: detailsData.phone,
         timezone: detailsData.timezone,
         zendesk_ticket_id: detailsData.zendesk_ticket_id,
+        reason: (detailsData as any).reason || "",
+        comments: (detailsData as any).comments || [],
         summary: chatData.answer
       });
+
+      if ((detailsData as any).resolution_id) {
+        setResolutionId((detailsData as any).resolution_id);
+      }
 
       setNewTimezone(detailsData.timezone || "EST");
       setClientPhone(detailsData.phone || "");
@@ -580,6 +679,18 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
       alert("Por favor ingresa el número de ticket para poder reacomodar el título.");
       return;
     }
+
+    if (rileyEvaluation?.status === "CHECK") {
+      const confirmClose = window.confirm(
+        `🤖 ALERTA DEL AGENTE RILEY:\n\n` +
+        `• Regla: ${rileyEvaluation.title}\n` +
+        `• Observación: ${rileyEvaluation.description}\n\n` +
+        (rileyEvaluation.suggestedResolution ? `💡 Sugerencia: Se recomienda usar '${rileyEvaluation.suggestedResolution}' en lugar de la resolución actual.\n\n` : '') +
+        `¿Deseas cerrar la tarea de todos modos con la resolución actual?`
+      );
+      if (!confirmClose) return;
+    }
+
     setSubmittingAction(true);
     try {
       const res = await fetch(`/api/close-task`, {
@@ -589,7 +700,8 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
           task_id: taskId,
           spanish_comment: closureComment,
           resolution_id: resolutionId,
-          ticket_number: finalTicketNum
+          ticket_number: finalTicketNum,
+          riley_status: rileyEvaluation?.status || "CHECK"
         })
       });
       if (res.ok) {
@@ -908,6 +1020,28 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                       className="w-full bg-white/5 border border-white/15 rounded-xl p-3 text-xs text-white placeholder-white/30 focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all leading-relaxed font-sans"
                     />
 
+                    {rileyEvaluation && rileyEvaluation.status === "CHECK" && (
+                      <div className="bg-amber-500/15 border border-amber-500/30 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-amber-200">
+                        <div className="flex items-center gap-2">
+                          <Bot className="w-4 h-4 text-amber-400 shrink-0" />
+                          <div>
+                            <span className="font-bold text-amber-300">{rileyEvaluation.title}:</span>{" "}
+                            <span className="text-white/90">{rileyEvaluation.description}</span>
+                          </div>
+                        </div>
+                        {rileyEvaluation.suggestedResolution && (
+                          <button
+                            type="button"
+                            onClick={() => handleApplySuggestedResolution(rileyEvaluation.suggestedResolution!)}
+                            className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-lg text-xs flex items-center gap-1 shrink-0 transition-all cursor-pointer shadow"
+                          >
+                            <ArrowRight className="w-3.5 h-3.5" />
+                            Cambiar a {rileyEvaluation.suggestedResolution}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
                     <div className="flex flex-wrap items-center justify-end gap-2.5">
                       <button
                         onClick={() => handleLogAndPush(spanishComment, true)}
@@ -954,9 +1088,24 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
 
                   {/* Close Task Form */}
                   <div className="bg-rose-500/10 border border-rose-500/25 p-5 rounded-xl space-y-4">
-                    <div className="flex items-center gap-2 text-rose-300 font-bold text-xs uppercase tracking-wider font-mono">
-                      <Lock className="w-4 h-4 text-rose-400" />
-                      Cerrar Caso y Guardar Resolución
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-rose-300 font-bold text-xs uppercase tracking-wider font-mono">
+                        <Lock className="w-4 h-4 text-rose-400" />
+                        Cerrar Caso y Guardar Resolución
+                      </div>
+                      {rileyEvaluation && (
+                        <button
+                          type="button"
+                          onClick={() => setShowRileyToast(true)}
+                          className={`text-[10px] font-mono font-bold px-2.5 py-1 rounded-full border flex items-center gap-1.5 transition-all cursor-pointer ${
+                            rileyEvaluation.status === "CHECK"
+                              ? "bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30 animate-pulse"
+                              : "bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30"
+                          }`}
+                        >
+                          🤖 Riley: {rileyEvaluation.status}
+                        </button>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -964,7 +1113,25 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                         <label className="text-[10px] font-bold text-white/50 uppercase">Resolución Final</label>
                         <select
                           value={resolutionId}
-                          onChange={(e) => setResolutionId(e.target.value)}
+                          onChange={async (e) => {
+                            const newResId = e.target.value;
+                            setResolutionId(newResId);
+                            if (taskId) {
+                              try {
+                                const res = await fetch("/api/update-resolution", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ task_id: taskId, resolution_id: newResId })
+                                });
+                                const data = await res.json();
+                                if (res.ok && data.success) {
+                                  showToast?.(`✅ Resolución actualizada en ClickUp.`, "success");
+                                }
+                              } catch (err) {
+                                console.error("Error actualizando resolución en ClickUp:", err);
+                              }
+                            }
+                          }}
                           className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-rose-400"
                         >
                           {resolutions.map(res => (
@@ -996,6 +1163,28 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                       </div>
                     </div>
 
+                    {rileyEvaluation && rileyEvaluation.status === "CHECK" && (
+                      <div className="bg-amber-500/15 border border-amber-500/30 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-amber-200">
+                        <div className="flex items-center gap-2">
+                          <Bot className="w-4 h-4 text-amber-400 shrink-0" />
+                          <div>
+                            <span className="font-bold text-amber-300">{rileyEvaluation.title}:</span>{" "}
+                            <span className="text-white/90">{rileyEvaluation.description}</span>
+                          </div>
+                        </div>
+                        {rileyEvaluation.suggestedResolution && (
+                          <button
+                            type="button"
+                            onClick={() => handleApplySuggestedResolution(rileyEvaluation.suggestedResolution!)}
+                            className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-lg text-xs flex items-center gap-1 shrink-0 transition-all cursor-pointer shadow"
+                          >
+                            <ArrowRight className="w-3.5 h-3.5" />
+                            Cambiar a {rileyEvaluation.suggestedResolution}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
                     <button
                       onClick={handleCloseTask}
                       disabled={submittingAction}
@@ -1011,9 +1200,27 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
               {activeSubTab === "zendesk_user" && (
                 <div className="glass-card p-5 rounded-2xl border border-white/10">
                   <ZendeskUserChecker
+                    taskId={currentTaskId}
+                    initialEmail={task?.email}
                     initialPhone={clientPhone}
                     initialName={task?.name}
                     isModalMode={true}
+                    onTaskUpdated={() => onActionComplete(true)}
+                    onSelectUser={(u, ticket) => {
+                      if (u.phone) setClientPhone(u.phone);
+                      const activeTicketId = ticket?.id ? String(ticket.id) : (u.recent_tickets?.[0]?.id ? String(u.recent_tickets[0].id) : "");
+                      if (activeTicketId) {
+                        setZendeskTicketId(activeTicketId);
+                        setTicketNumber(activeTicketId);
+                      }
+                      if (onTaskUpdated) {
+                        onTaskUpdated(currentTaskId, { 
+                          email: u.email, 
+                          phone: u.phone, 
+                          zendesk_ticket_id: activeTicketId 
+                        });
+                      }
+                    }}
                   />
                 </div>
               )}
@@ -1237,6 +1444,16 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
               )}
             </div>
           </div>
+        )}
+
+        {/* Riley Agent Floating Resolution Toast */}
+        {showRileyToast && rileyEvaluation && rileyEvaluation.status === "CHECK" && (
+          <RileyToast
+            evaluation={rileyEvaluation}
+            onApplySuggestedResolution={handleApplySuggestedResolution}
+            onDismiss={() => setShowRileyToast(false)}
+            onClose={() => setShowRileyToast(false)}
+          />
         )}
 
       </div>

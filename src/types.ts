@@ -7,6 +7,8 @@ export interface Task {
   local_time?: string;
   tz_tag?: string;
   phone?: string;
+  email?: string;
+  zendesk_ticket_id?: string;
   answered_at?: string;
   priority?: string;
 }

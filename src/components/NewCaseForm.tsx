@@ -24,9 +24,16 @@ import {
   Folder,
   Package,
   UserCheck,
+  Trash2,
   X
 } from "lucide-react";
 import ZendeskUserChecker from "./ZendeskUserChecker";
+import { 
+  downloadFileViaBlob, 
+  saveToTempFolder, 
+  getTempFiles, 
+  clearTempFolder 
+} from "../services/sharefile";
 
 interface NewCaseFormProps {
   onCaseCreated: () => void;
@@ -96,6 +103,31 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
     hasPassword?: boolean;
     isOauthConfigured?: boolean;
   } | null>(null);
+
+  // Download and temporary storage states
+  const [downloadingFiles, setDownloadingFiles] = useState<Record<string, boolean>>({});
+  const [isDownloadingZip, setIsDownloadingZip] = useState(false);
+  const [savingToTemp, setSavingToTemp] = useState<Record<string, boolean>>({});
+  const [isSavingFolderTemp, setIsSavingFolderTemp] = useState(false);
+
+  const [showTempModal, setShowTempModal] = useState(false);
+  const [tempFilesList, setTempFilesList] = useState<any[]>([]);
+  const [loadingTempFiles, setLoadingTempFiles] = useState(false);
+  const [tempFolderStatus, setTempFolderStatus] = useState<string | null>(null);
+
+  const loadTempFiles = async () => {
+    setLoadingTempFiles(true);
+    try {
+      const res = await getTempFiles();
+      if (res.success && res.files) {
+        setTempFilesList(res.files);
+      }
+    } catch (e) {
+      console.error("Error cargando archivos temporales:", e);
+    } finally {
+      setLoadingTempFiles(false);
+    }
+  };
 
   useEffect(() => {
     fetchCurrentConfig();
@@ -1259,27 +1291,54 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
                     Archivos en Carpeta Contenedora ({locatedFolderFiles.length})
                   </span>
                 </div>
-                {locatedFolderZipUrl && (
-                  <a
-                    href={locatedFolderZipUrl}
-                    download
-                    className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20 cursor-pointer"
-                    title="Descargar todos los archivos de esta carpeta en un archivo .ZIP"
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowTempModal(true);
+                      loadTempFiles();
+                    }}
+                    className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-cyan-300 border border-cyan-500/30 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                    title="Ver archivos guardados en la carpeta temporal del servidor"
                   >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Descargar Todos (ZIP)</span>
-                  </a>
-                )}
+                    <Folder className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Ver Carpeta Temp Servidor</span>
+                  </button>
+
+                  {locatedFolderZipUrl && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          setIsDownloadingZip(true);
+                          await downloadFileViaBlob(locatedFolderZipUrl, `ShareFile_Invoice_${invoice || 'Carpeta'}_Pack.zip`);
+                        } catch (err: any) {
+                          alert(err.message);
+                        } finally {
+                          setIsDownloadingZip(false);
+                        }
+                      }}
+                      disabled={isDownloadingZip}
+                      className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20 cursor-pointer disabled:opacity-50"
+                      title="Descargar todos los archivos en un archivo .ZIP sin errores de navegador"
+                    >
+                      {isDownloadingZip ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                      <span>{isDownloadingZip ? "Generando ZIP..." : "Descargar Todos (ZIP)"}</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
                 {locatedFolderFiles.map((file: any, index: number) => {
                   const fileDownloadUrl = file.downloadUrl || `/api/sharefile/download-file/${file.Id}?name=${encodeURIComponent(file.Name || 'archivo')}`;
                   const sizeKb = file.FileSizeBytes ? (file.FileSizeBytes / 1024).toFixed(1) + " KB" : file.size ? (file.size / 1024).toFixed(1) + " KB" : "";
+                  const fileId = file.Id || index;
+                  
                   return (
                     <div
-                      key={file.Id || index}
-                      className="flex items-center justify-between p-2.5 bg-white/5 hover:bg-white/10 rounded-lg border border-white/5 text-xs text-white/90 transition-all gap-2"
+                      key={fileId}
+                      className="flex flex-wrap items-center justify-between p-2.5 bg-white/5 hover:bg-white/10 rounded-lg border border-white/5 text-xs text-white/90 transition-all gap-2"
                     >
                       <div className="flex items-center gap-2 overflow-hidden flex-1 min-w-0">
                         <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -1288,15 +1347,71 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
                         </span>
                         {sizeKb && <span className="text-[10px] text-white/40 shrink-0">({sizeKb})</span>}
                       </div>
-                      <a
-                        href={fileDownloadUrl}
-                        download
-                        className="px-3 py-1 bg-white/10 hover:bg-emerald-500 text-white hover:text-slate-950 rounded-md text-[11px] font-bold transition-all shrink-0 flex items-center gap-1 cursor-pointer"
-                        title={`Descargar ${file.Name || file.name}`}
-                      >
-                        <Download className="w-3 h-3" />
-                        <span>Descargar</span>
-                      </a>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {/* Botón Guardar en Carpeta Temporal para Extracción/OCR */}
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              setSavingToTemp(prev => ({ ...prev, [fileId]: true }));
+                              const res = await saveToTempFolder({
+                                itemId: file.Id,
+                                fileName: file.Name || file.name,
+                                invoice: invoice || undefined
+                              });
+                              if (res.success) {
+                                setSharefileSuccess(`📂 Archivo "${res.fileName}" guardado en la carpeta temporal del servidor (/temp_downloads).`);
+                                if (res.extractedData) {
+                                  if (res.extractedData.telefono && !phone) setPhone(res.extractedData.telefono);
+                                }
+                                await loadTempFiles();
+                              } else {
+                                setSharefileError(res.error || "Error al guardar archivo en carpeta temporal");
+                              }
+                            } catch (err: any) {
+                              setSharefileError(err.message);
+                            } finally {
+                              setSavingToTemp(prev => ({ ...prev, [fileId]: false }));
+                            }
+                          }}
+                          disabled={!!savingToTemp[fileId]}
+                          className="px-2.5 py-1 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 rounded-md text-[11px] font-bold transition-all shrink-0 flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                          title="Guardar archivo en la carpeta temporal del servidor (/temp_downloads) para OCR o extracción de datos"
+                        >
+                          {savingToTemp[fileId] ? (
+                            <Loader2 className="w-3 h-3 animate-spin text-cyan-400" />
+                          ) : (
+                            <Folder className="w-3 h-3 text-cyan-400" />
+                          )}
+                          <span>{savingToTemp[fileId] ? "Guardando..." : "Guardar Temp"}</span>
+                        </button>
+
+                        {/* Botón Descargar directamente sin iframe redirect */}
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              setDownloadingFiles(prev => ({ ...prev, [fileId]: true }));
+                              await downloadFileViaBlob(fileDownloadUrl, file.Name || file.name || 'archivo.pdf');
+                            } catch (err: any) {
+                              alert(err.message);
+                            } finally {
+                              setDownloadingFiles(prev => ({ ...prev, [fileId]: false }));
+                            }
+                          }}
+                          disabled={!!downloadingFiles[fileId]}
+                          className="px-3 py-1 bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-slate-950 border border-emerald-500/30 rounded-md text-[11px] font-bold transition-all shrink-0 flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                          title={`Descargar ${file.Name || file.name}`}
+                        >
+                          {downloadingFiles[fileId] ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Download className="w-3 h-3" />
+                          )}
+                          <span>{downloadingFiles[fileId] ? "Descargando..." : "Descargar"}</span>
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -1380,6 +1495,113 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
                 setShowZendeskChecker(false);
               }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Modal para Archivos Temporales del Servidor (/temp_downloads) */}
+      {showTempModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-6 max-w-2xl w-full max-h-[85vh] flex flex-col relative shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2">
+                <Folder className="w-5 h-5 text-cyan-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                    Carpeta Temporal del Servidor (/temp_downloads)
+                  </h3>
+                  <p className="text-[11px] text-white/50">
+                    Los archivos aquí guardados se usan exclusivamente para extracción de datos y OCR.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTempModal(false)}
+                className="p-1.5 text-white/60 hover:text-white bg-white/10 hover:bg-white/20 rounded-xl transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {tempFolderStatus && (
+              <div className="p-3 bg-cyan-500/10 border border-cyan-500/20 rounded-xl text-xs text-cyan-300 font-sans">
+                {tempFolderStatus}
+              </div>
+            )}
+
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+              {loadingTempFiles ? (
+                <div className="py-8 text-center text-white/50 flex flex-col items-center justify-center gap-2">
+                  <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
+                  <span className="text-xs">Consultando carpeta temporal del servidor...</span>
+                </div>
+              ) : tempFilesList.length === 0 ? (
+                <div className="py-8 text-center text-white/40 border border-dashed border-white/10 rounded-xl space-y-1">
+                  <Folder className="w-8 h-8 text-white/20 mx-auto" />
+                  <p className="text-xs font-medium">La carpeta temporal está vacía.</p>
+                  <p className="text-[10px]">Usa el botón "Guardar Temp" en la búsqueda de ShareFile para guardar archivos aquí.</p>
+                </div>
+              ) : (
+                tempFilesList.map((tf: any, idx: number) => (
+                  <div
+                    key={tf.fileName || idx}
+                    className="flex items-center justify-between p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs text-white"
+                  >
+                    <div className="flex items-center gap-2.5 overflow-hidden flex-1 min-w-0">
+                      <FileText className="w-4 h-4 text-cyan-400 shrink-0" />
+                      <div className="truncate">
+                        <p className="font-mono text-xs font-semibold text-white/90 truncate">{tf.fileName}</p>
+                        <p className="text-[10px] text-white/40">{tf.fileSizeFormatted} • Guardado {new Date(tf.createdAt).toLocaleTimeString()}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await downloadFileViaBlob(tf.downloadUrl, tf.fileName);
+                        } catch (err: any) {
+                          alert(err.message);
+                        }
+                      }}
+                      className="px-2.5 py-1 bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-slate-950 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1 cursor-pointer shrink-0"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>Descargar</span>
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="border-t border-white/10 pt-3 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={loadTempFiles}
+                className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white/80 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                Actualizar Lista
+              </button>
+
+              {tempFilesList.length > 0 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (confirm("¿Vaciar todos los archivos de la carpeta temporal del servidor?")) {
+                      const res = await clearTempFolder();
+                      if (res.success) {
+                        setTempFolderStatus("✅ Carpeta temporal vaciada.");
+                        await loadTempFiles();
+                      }
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Vaciar Carpeta Temporal</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

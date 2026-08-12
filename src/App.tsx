@@ -43,6 +43,10 @@ export default function App() {
       try {
         const res = await fetch("/api/today-tasks");
         if (res.ok) {
+          const contentType = res.headers.get("content-type") || "";
+          if (!contentType.includes("application/json")) {
+            throw new Error("Respuesta del servidor no es JSON válido");
+          }
           const data = await res.json();
           setTasks(data.tasks || []);
           setLoadingTasks(false);
@@ -87,7 +91,7 @@ export default function App() {
       case "refund-list":
         return <RefundsList />;
       case "zendesk-check":
-        return <ZendeskUserChecker />;
+        return <ZendeskUserChecker tasksList={tasks} onTaskUpdated={fetchTasks} />;
       case "metrics":
         return <MetricsPanel />;
       default:

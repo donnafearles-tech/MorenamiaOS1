@@ -17,6 +17,24 @@
         "Sin teléfono": 84.8
       },
       "total_clients": 105
+    },
+    {
+      "timestamp": "2026-08-12T02:38:33.092Z",
+      "distribution": {
+        "Texas": 0.9,
+        "Florida": 0.9,
+        "Illinois": 0.9,
+        "Missouri": 0.9,
+        "Oklahoma": 0.9,
+        "Virginia": 0.9,
+        "Tennessee": 0.9,
+        "California": 1.9,
+        "Connecticut": 0.9,
+        "Pennsylvania": 1.9,
+        "Otros / No US": 6.5,
+        "Sin teléfono": 82.4
+      },
+      "total_clients": 108
     }
   ]
 }

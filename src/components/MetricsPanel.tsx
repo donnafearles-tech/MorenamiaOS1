@@ -26,7 +26,7 @@ export default function MetricsPanel() {
     setLoadingLogs(true);
     try {
       const res = await fetch("/api/auto-closed-logs");
-      if (res.ok) {
+      if (res.ok && (res.headers.get("content-type") || "").includes("application/json")) {
         const data = await res.json();
         setAutoClosedLogs(data.logs || []);
       }
@@ -44,6 +44,10 @@ export default function MetricsPanel() {
       try {
         const res = await fetch("/api/metrics");
         if (res.ok) {
+          const contentType = res.headers.get("content-type") || "";
+          if (!contentType.includes("application/json")) {
+            throw new Error("Respuesta del servidor no es JSON válido");
+          }
           const data = await res.json();
           setMetrics(data.metrics);
           setLoading(false);

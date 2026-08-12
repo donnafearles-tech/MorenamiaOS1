@@ -331,3 +331,105 @@ export function getFolderZipDownloadUrl(folderId: string, invoice?: string): str
   const cleanId = folderId.replace(/^fo/, "");
   return `/api/sharefile/download-folder-zip/${cleanId}${invoice ? `?invoice=${encodeURIComponent(invoice)}` : ""}`;
 }
+
+/**
+ * Descarga un archivo directamente como un Blob binario.
+ * Evita redirecciones iframe y la pantalla de verificación de cookies de seguridad.
+ */
+export async function downloadFileViaBlob(url: string, defaultFileName: string = "archivo.pdf"): Promise<void> {
+  try {
+    console.log(`[Blob Download] Fetching file from ${url}...`);
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Error HTTP ${res.status}: ${res.statusText}`);
+    }
+
+    const blob = await res.blob();
+    const contentDisposition = res.headers.get("content-disposition");
+    let fileName = defaultFileName;
+
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename\*?=['"]?(?:UTF-8'')?([^;'"\n]+)['"]?/i);
+      if (match && match[1]) {
+        fileName = decodeURIComponent(match[1]);
+      }
+    }
+
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(blobUrl);
+    console.log(`[Blob Download] ¡Archivo "${fileName}" descargado con éxito!`);
+  } catch (err: any) {
+    console.error("[Blob Download Error]", err);
+    throw new Error(`No se pudo descargar el archivo: ${err.message}`);
+  }
+}
+
+/**
+ * Guarda un archivo o paquete en la carpeta temporal del servidor (/temp_downloads) para extracción de datos/OCR.
+ */
+export async function saveToTempFolder(params: {
+  itemId?: string;
+  fileName?: string;
+  folderId?: string;
+  invoice?: string;
+}): Promise<{
+  success: boolean;
+  message?: string;
+  fileName?: string;
+  filePath?: string;
+  fileSizeFormatted?: string;
+  extractedData?: any;
+  error?: string;
+}> {
+  try {
+    const res = await fetch("/api/sharefile/save-to-temp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params)
+    });
+    return await res.json();
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Consulta los archivos actualmente guardados en la carpeta temporal del servidor.
+ */
+export async function getTempFiles(): Promise<{
+  success: boolean;
+  count?: number;
+  files?: Array<{
+    fileName: string;
+    fileSizeFormatted: string;
+    createdAt: string;
+    downloadUrl: string;
+  }>;
+  error?: string;
+}> {
+  try {
+    const res = await fetch("/api/temp-files");
+    return await res.json();
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Vacía la carpeta temporal del servidor.
+ */
+export async function clearTempFolder(): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const res = await fetch("/api/temp-files", { method: "DELETE" });
+    return await res.json();
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
