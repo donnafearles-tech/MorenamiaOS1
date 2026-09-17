@@ -15,6 +15,7 @@ import {
   Phone
 } from "lucide-react";
 import { Metric } from "../types";
+import VertexTestPanel from "./VertexTestPanel";
 
 export default function MetricsPanel() {
   const [metrics, setMetrics] = useState<Metric | null>(null);
@@ -77,9 +78,9 @@ export default function MetricsPanel() {
       {/* Header */}
       <div className="glass-card p-6 flex items-center justify-between">
         <div>
-          <h2 className="text-3xl font-bold font-serif tracking-tight text-white mb-1">Métricas de Rendimiento</h2>
+          <h2 className="text-3xl font-bold font-serif tracking-tight text-white mb-1">Métricas y Diagnóstico</h2>
           <p className="text-sm text-white/70 font-sans">
-            Estadísticas internas en tiempo real sobre la automatización del Morena OS y procesamiento de Donna IA.
+            Estadísticas internas en tiempo real sobre la automatización de Donna AI, el estado de Vertex AI y el rendimiento del sistema.
           </p>
         </div>
 
@@ -91,6 +92,9 @@ export default function MetricsPanel() {
           <RotateCw className="w-4.5 h-4.5" />
         </button>
       </div>
+
+      {/* Panel de Diagnóstico e Interacción Vertex AI */}
+      <VertexTestPanel />
 
       {loading ? (
         <div className="glass-card p-24 flex flex-col items-center justify-center space-y-4">

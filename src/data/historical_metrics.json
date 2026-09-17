@@ -35,6 +35,321 @@
         "Sin teléfono": 82.4
       },
       "total_clients": 108
+    },
+    {
+      "timestamp": "2026-08-12T19:55:13.193Z",
+      "distribution": {
+        "Ohio": 0.9,
+        "Texas": 0.9,
+        "Florida": 1.8,
+        "Illinois": 0.9,
+        "Missouri": 0.9,
+        "Oklahoma": 0.9,
+        "Virginia": 0.9,
+        "Tennessee": 0.9,
+        "California": 1.8,
+        "Connecticut": 0.9,
+        "Pennsylvania": 1.8,
+        "Otros / No US": 5.4,
+        "Sin teléfono": 82.1
+      },
+      "total_clients": 112
+    },
+    {
+      "timestamp": "2026-08-12T21:12:05.270Z",
+      "distribution": {
+        "Ohio": 0.9,
+        "Texas": 0.9,
+        "Florida": 1.8,
+        "Illinois": 0.9,
+        "Missouri": 0.9,
+        "Oklahoma": 0.9,
+        "Virginia": 0.9,
+        "Tennessee": 0.9,
+        "California": 1.8,
+        "Connecticut": 0.9,
+        "Pennsylvania": 1.8,
+        "Otros / No US": 5.4,
+        "Sin teléfono": 82.1
+      },
+      "total_clients": 112
+    },
+    {
+      "timestamp": "2026-08-13T01:37:02.344Z",
+      "distribution": {
+        "Ohio": 0.9,
+        "Texas": 0.9,
+        "Florida": 1.8,
+        "Illinois": 0.9,
+        "Missouri": 0.9,
+        "Oklahoma": 0.9,
+        "Virginia": 0.9,
+        "Tennessee": 0.9,
+        "California": 1.8,
+        "Connecticut": 0.9,
+        "Pennsylvania": 1.8,
+        "Otros / No US": 5.3,
+        "Sin teléfono": 82.3
+      },
+      "total_clients": 113
+    },
+    {
+      "timestamp": "2026-08-13T01:53:02.303Z",
+      "distribution": {
+        "Ohio": 0.9,
+        "Texas": 0.9,
+        "Florida": 1.8,
+        "Illinois": 0.9,
+        "Missouri": 0.9,
+        "Oklahoma": 0.9,
+        "Virginia": 0.9,
+        "Tennessee": 0.9,
+        "California": 1.8,
+        "Connecticut": 0.9,
+        "Pennsylvania": 1.8,
+        "Otros / No US": 5.3,
+        "Sin teléfono": 82.3
+      },
+      "total_clients": 113
+    },
+    {
+      "timestamp": "2026-08-13T02:08:49.055Z",
+      "distribution": {
+        "Ohio": 0.9,
+        "Texas": 0.9,
+        "Florida": 1.8,
+        "Illinois": 0.9,
+        "Missouri": 0.9,
+        "Oklahoma": 0.9,
+        "Virginia": 0.9,
+        "Tennessee": 0.9,
+        "California": 1.8,
+        "Connecticut": 0.9,
+        "Pennsylvania": 1.8,
+        "Otros / No US": 5.3,
+        "Sin teléfono": 82.3
+      },
+      "total_clients": 113
+    },
+    {
+      "timestamp": "2026-08-13T02:20:19.114Z",
+      "distribution": {
+        "Ohio": 0.9,
+        "Texas": 0.9,
+        "Florida": 1.8,
+        "Illinois": 0.9,
+        "Missouri": 0.9,
+        "Oklahoma": 0.9,
+        "Virginia": 0.9,
+        "Tennessee": 0.9,
+        "California": 1.8,
+        "Connecticut": 0.9,
+        "Pennsylvania": 1.8,
+        "Otros / No US": 5.3,
+        "Sin teléfono": 82.3
+      },
+      "total_clients": 113
+    },
+    {
+      "timestamp": "2026-08-13T02:52:28.630Z",
+      "distribution": {
+        "Ohio": 0.9,
+        "Texas": 0.9,
+        "Florida": 1.8,
+        "Illinois": 0.9,
+        "Missouri": 0.9,
+        "Oklahoma": 0.9,
+        "Virginia": 0.9,
+        "Tennessee": 0.9,
+        "California": 1.8,
+        "Connecticut": 0.9,
+        "Pennsylvania": 1.8,
+        "Otros / No US": 5.3,
+        "Sin teléfono": 82.3
+      },
+      "total_clients": 113
+    },
+    {
+      "timestamp": "2026-08-13T04:17:00.285Z",
+      "distribution": {
+        "Ohio": 5.3,
+        "Texas": 5.3,
+        "Florida": 10.5,
+        "Illinois": 5.3,
+        "Missouri": 5.3,
+        "Oklahoma": 5.3,
+        "Virginia": 5.3,
+        "Tennessee": 5.3,
+        "California": 10.5,
+        "Connecticut": 5.3,
+        "Pennsylvania": 10.5,
+        "Otros / No US": 21.1,
+        "Sin teléfono": 5.3
+      },
+      "total_clients": 19
+    },
+    {
+      "timestamp": "2026-08-13T15:09:14.782Z",
+      "distribution": {
+        "Ohio": 5,
+        "Texas": 5,
+        "Florida": 10,
+        "Illinois": 5,
+        "Missouri": 5,
+        "Oklahoma": 5,
+        "Virginia": 5,
+        "Tennessee": 5,
+        "California": 10,
+        "Connecticut": 5,
+        "Pennsylvania": 10,
+        "Otros / No US": 20,
+        "Sin teléfono": 10
+      },
+      "total_clients": 20
+    },
+    {
+      "timestamp": "2026-08-14T15:39:22.508Z",
+      "distribution": {
+        "Ohio": 5,
+        "Texas": 5,
+        "Florida": 10,
+        "Illinois": 10,
+        "Missouri": 5,
+        "Oklahoma": 5,
+        "Virginia": 5,
+        "Tennessee": 5,
+        "California": 10,
+        "Pennsylvania": 10,
+        "Otros / No US": 20,
+        "Sin teléfono": 10
+      },
+      "total_clients": 20
+    },
+    {
+      "timestamp": "2026-08-14T17:56:52.946Z",
+      "distribution": {
+        "Ohio": 5,
+        "Texas": 5,
+        "Florida": 10,
+        "Illinois": 10,
+        "Missouri": 5,
+        "Oklahoma": 5,
+        "Virginia": 5,
+        "Tennessee": 5,
+        "California": 10,
+        "Pennsylvania": 10,
+        "Otros / No US": 20,
+        "Sin teléfono": 10
+      },
+      "total_clients": 20
+    },
+    {
+      "timestamp": "2026-09-05T03:42:24.204Z",
+      "distribution": {
+        "Texas": 11.8,
+        "Alabama": 5.9,
+        "Florida": 5.9,
+        "Colorado": 5.9,
+        "Missouri": 5.9,
+        "Virginia": 5.9,
+        "Tennessee": 5.9,
+        "California": 5.9,
+        "Connecticut": 5.9,
+        "Pennsylvania": 5.9,
+        "Otros / No US": 17.6,
+        "Sin teléfono": 17.6
+      },
+      "total_clients": 17
+    },
+    {
+      "timestamp": "2026-09-05T04:05:14.254Z",
+      "distribution": {
+        "Texas": 11.8,
+        "Alabama": 5.9,
+        "Florida": 5.9,
+        "Colorado": 5.9,
+        "Missouri": 5.9,
+        "Virginia": 5.9,
+        "Tennessee": 5.9,
+        "California": 5.9,
+        "Connecticut": 5.9,
+        "Pennsylvania": 5.9,
+        "Otros / No US": 17.6,
+        "Sin teléfono": 17.6
+      },
+      "total_clients": 17
+    },
+    {
+      "timestamp": "2026-09-05T04:05:50.800Z",
+      "distribution": {
+        "Texas": 11.8,
+        "Alabama": 5.9,
+        "Florida": 5.9,
+        "Colorado": 5.9,
+        "Missouri": 5.9,
+        "Virginia": 5.9,
+        "Tennessee": 5.9,
+        "California": 5.9,
+        "Connecticut": 5.9,
+        "Pennsylvania": 5.9,
+        "Otros / No US": 17.6,
+        "Sin teléfono": 17.6
+      },
+      "total_clients": 17
+    },
+    {
+      "timestamp": "2026-09-05T04:06:43.695Z",
+      "distribution": {
+        "Texas": 11.8,
+        "Alabama": 5.9,
+        "Florida": 5.9,
+        "Colorado": 5.9,
+        "Missouri": 5.9,
+        "Virginia": 5.9,
+        "Tennessee": 5.9,
+        "California": 5.9,
+        "Connecticut": 5.9,
+        "Pennsylvania": 5.9,
+        "Otros / No US": 17.6,
+        "Sin teléfono": 17.6
+      },
+      "total_clients": 17
+    },
+    {
+      "timestamp": "2026-09-05T04:10:20.374Z",
+      "distribution": {
+        "Texas": 11.8,
+        "Alabama": 5.9,
+        "Florida": 5.9,
+        "Colorado": 5.9,
+        "Missouri": 5.9,
+        "Virginia": 5.9,
+        "Tennessee": 5.9,
+        "California": 5.9,
+        "Connecticut": 5.9,
+        "Pennsylvania": 5.9,
+        "Otros / No US": 17.6,
+        "Sin teléfono": 17.6
+      },
+      "total_clients": 17
+    },
+    {
+      "timestamp": "2026-09-05T04:14:40.459Z",
+      "distribution": {
+        "Texas": 11.8,
+        "Alabama": 5.9,
+        "Florida": 5.9,
+        "Colorado": 5.9,
+        "Missouri": 5.9,
+        "Virginia": 5.9,
+        "Tennessee": 5.9,
+        "California": 5.9,
+        "Connecticut": 5.9,
+        "Pennsylvania": 5.9,
+        "Otros / No US": 17.6,
+        "Sin teléfono": 17.6
+      },
+      "total_clients": 17
     }
   ]
 }

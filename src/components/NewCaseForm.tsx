@@ -43,7 +43,7 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
   const [invoice, setInvoice] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const [reason, setReason] = useState("deffective");
+  const [reason, setReason] = useState("");
   const [saleDate, setSaleDate] = useState("");
   const [contactDate, setContactDate] = useState(new Date().toISOString().split("T")[0]);
   const [amountUsd, setAmountUsd] = useState("");
@@ -62,6 +62,13 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
 
   const [loading, setLoading] = useState(false);
   const [createdUrl, setCreatedUrl] = useState<string | null>(null);
+  const [formSubmitError, setFormSubmitError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{
+    invoice?: boolean;
+    name?: boolean;
+    initialComment?: boolean;
+    reason?: boolean;
+  }>({});
 
   // Citrix ShareFile Auto Fetching States & Logic
   const [isSearchingSharefile, setIsSearchingSharefile] = useState(false);
@@ -607,11 +614,27 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
 
   const handleSubmit = async (e?: React.FormEvent, createZendesk: boolean = false) => {
     if (e) e.preventDefault();
-    if (!invoice || !name || !initialComment) {
-      alert("Por favor completa los campos requeridos: Factura, Nombre de cliente y Comentario Inicial.");
+    setFormSubmitError(null);
+
+    const errors: { invoice?: boolean; name?: boolean; initialComment?: boolean; reason?: boolean } = {};
+    if (!invoice || !invoice.trim()) errors.invoice = true;
+    if (!name || !name.trim()) errors.name = true;
+    if (!reason || !reason.trim()) errors.reason = true;
+    if (!initialComment || !initialComment.trim()) errors.initialComment = true;
+
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      const missingList = [];
+      if (errors.invoice) missingList.push("Número de Factura / Invoice");
+      if (errors.name) missingList.push("Nombre del Cliente");
+      if (errors.reason) missingList.push("Motivo del Reclamo");
+      if (errors.initialComment) missingList.push("Comentario Inicial de Atención");
+      
+      setFormSubmitError(`Faltan campos obligatorios requeridos: ${missingList.join(", ")}.`);
       return;
     }
 
+    setFieldErrors({});
     setLoading(true);
     setCreatedUrl(null);
 
@@ -620,15 +643,15 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          invoice,
-          name,
-          phone,
+          invoice: invoice.trim(),
+          name: name.trim(),
+          phone: phone ? phone.trim() : "",
           reason,
           sale_date: saleDate,
           contact_date: contactDate,
           amount_usd: amountUsd,
           sharefile_link: sharefileLink,
-          initial_comment: initialComment,
+          initial_comment: initialComment.trim(),
           timezone,
           clickup_task_id: clickupTaskId,
           zendesk_ticket_id: zendeskTicketId,
@@ -644,10 +667,13 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
       const data = await res.json();
       if (res.ok) {
         setCreatedUrl(data.task_url);
+        setFormSubmitError(null);
         // Reset form
         setInvoice("");
         setName("");
         setPhone("");
+        setReason("");
+        setSaleDate("");
         setAmountUsd("");
         setSharefileLink("");
         setInitialComment("");
@@ -660,10 +686,10 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
         setStoreId("");
         onCaseCreated();
       } else {
-        alert(`Error al registrar el caso: ${data.error || "Ocurrió un error"}`);
+        setFormSubmitError(data.error || "Ocurrió un error al intentar registrar el caso en ClickUp.");
       }
     } catch (err: any) {
-      alert(`Error de red: ${err.message}`);
+      setFormSubmitError(`Error de conexión de red: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -754,6 +780,26 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
         </div>
       )}
 
+      {/* Form Submit Error Banner */}
+      {formSubmitError && (
+        <div className="bg-rose-500/10 border border-rose-500/30 p-4 rounded-2xl flex items-start justify-between text-rose-200 backdrop-blur-md gap-3">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-bold text-rose-300">No se pudo registrar el caso</p>
+              <p className="text-xs text-white/80 mt-0.5 font-sans leading-relaxed">{formSubmitError}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setFormSubmitError(null)}
+            className="text-white/40 hover:text-white text-xs cursor-pointer px-1.5 py-0.5"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Main Registration Form */}
       <form onSubmit={handleSubmit} className="glass-card p-8 space-y-6">
         
@@ -769,18 +815,24 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
               value={invoice}
               onChange={(e) => {
                 setInvoice(e.target.value);
+                if (fieldErrors.invoice) setFieldErrors(prev => ({ ...prev, invoice: false }));
                 if (sharefileValidation.invoice !== undefined) {
                   setSharefileValidation(prev => ({ ...prev, invoice: e.target.value.trim() !== "" }));
                 }
               }}
               className={`w-full bg-white/5 border ${
-                sharefileValidation.invoice === false
+                fieldErrors.invoice || sharefileValidation.invoice === false
                   ? "border-rose-500 ring-2 ring-rose-500/20"
                   : "border-white/15 focus:border-white/35"
               } rounded-xl px-4 py-3 text-sm text-white placeholder-white/30 transition-all focus:outline-none`}
               required
             />
-            {sharefileValidation.invoice === false && (
+            {fieldErrors.invoice && (
+              <span className="text-rose-400 text-[10px] font-sans font-medium block">
+                ⚠️ El número de factura es obligatorio.
+              </span>
+            )}
+            {sharefileValidation.invoice === false && !fieldErrors.invoice && (
               <span className="text-rose-400 text-[10px] font-sans font-medium block">
                 ⚠️ Se requiere número de factura para buscar en ShareFile.
               </span>
@@ -813,6 +865,12 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
               onChange={(e) => setZendeskTicketId(e.target.value)}
               className="w-full bg-white/5 border border-white/15 rounded-xl px-4 py-3 text-sm text-white placeholder-white/30 focus:bg-white/10 focus:border-white/35 transition-all focus:outline-none"
             />
+            {zendeskTicketId.trim() && (
+              <p className="text-[11px] text-cyan-400/90 flex items-center gap-1.5 pt-0.5">
+                <Sparkles className="w-3 h-3 text-cyan-400 shrink-0" />
+                <span>Vinculación activa: Se actualizará en Zendesk el <strong>teléfono</strong> y <strong>External ID</strong> (Invoice {invoice ? `#${invoice}` : ""}) del usuario.</span>
+              </p>
+            )}
           </div>
 
           {/* Nombre Cliente */}
@@ -824,10 +882,22 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
               type="text"
               placeholder="Ej. Marie Antoinette"
               value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full bg-white/5 border border-white/15 rounded-xl px-4 py-3 text-sm text-white placeholder-white/30 focus:bg-white/10 focus:border-white/35 transition-all focus:outline-none"
+              onChange={(e) => {
+                setName(e.target.value);
+                if (fieldErrors.name) setFieldErrors(prev => ({ ...prev, name: false }));
+              }}
+              className={`w-full bg-white/5 border ${
+                fieldErrors.name
+                  ? "border-rose-500 ring-2 ring-rose-500/20"
+                  : "border-white/15 focus:border-white/35"
+              } rounded-xl px-4 py-3 text-sm text-white placeholder-white/30 transition-all focus:outline-none`}
               required
             />
+            {fieldErrors.name && (
+              <span className="text-rose-400 text-[10px] font-sans font-medium block">
+                ⚠️ El nombre del cliente es obligatorio.
+              </span>
+            )}
           </div>
 
           {/* Email Cliente */}
@@ -932,9 +1002,15 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
             </label>
             <select
               value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="w-full bg-white/5 border border-white/15 rounded-xl px-4 py-3 text-sm text-white focus:bg-white/10 focus:border-white/35 transition-all focus:outline-none [&>option]:bg-slate-900"
+              onChange={(e) => {
+                setReason(e.target.value);
+                if (fieldErrors.reason) {
+                  setFieldErrors(prev => ({ ...prev, reason: false }));
+                }
+              }}
+              className={`w-full bg-white/5 border ${fieldErrors.reason ? 'border-rose-500 ring-1 ring-rose-500' : 'border-white/15'} rounded-xl px-4 py-3 text-sm text-white focus:bg-white/10 focus:border-white/35 transition-all focus:outline-none [&>option]:bg-slate-900`}
             >
+              <option value="" disabled className="text-white/40">-- Seleccionar Motivo del Reclamo --</option>
               {reasonKeys.map(r => (
                 <option key={r.key} value={r.key}>{r.label}</option>
               ))}
@@ -1431,11 +1507,23 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
           <textarea
             placeholder="Escribe el resumen del caso en español tal como te lo reportó el cliente... Ej. El cliente llamó sumamente molesto porque el producto llegó dañado o no funciona correctamente..."
             value={initialComment}
-            onChange={(e) => setInitialComment(e.target.value)}
+            onChange={(e) => {
+              setInitialComment(e.target.value);
+              if (fieldErrors.initialComment) setFieldErrors(prev => ({ ...prev, initialComment: false }));
+            }}
             rows={5}
-            className="w-full bg-white/5 border border-white/15 rounded-xl p-4 text-sm text-white placeholder-white/30 focus:bg-white/10 focus:border-white/35 transition-all focus:outline-none font-sans leading-relaxed"
+            className={`w-full bg-white/5 border ${
+              fieldErrors.initialComment
+                ? "border-rose-500 ring-2 ring-rose-500/20"
+                : "border-white/15 focus:border-white/35"
+            } rounded-xl p-4 text-sm text-white placeholder-white/30 transition-all focus:outline-none font-sans leading-relaxed`}
             required
           />
+          {fieldErrors.initialComment && (
+            <span className="text-rose-400 text-[10px] font-sans font-medium block">
+              ⚠️ El comentario inicial de atención es obligatorio para registrar el caso.
+            </span>
+          )}
         </div>
 
         {/* Action Buttons */}
@@ -1489,9 +1577,15 @@ export default function NewCaseForm({ onCaseCreated }: NewCaseFormProps) {
               initialPhone={phone}
               initialName={name}
               isModalMode={true}
-              onSelectUser={(u) => {
+              onSelectUser={(u, ticket) => {
                 if (u.email && !email) setEmail(u.email);
                 if (u.phone && !phone) setPhone(u.phone);
+                if (u.name && !name) setName(u.name);
+                if (ticket && ticket.id) {
+                  setZendeskTicketId(String(ticket.id));
+                } else if (u.recent_tickets && u.recent_tickets.length > 0 && !zendeskTicketId) {
+                  setZendeskTicketId(String(u.recent_tickets[0].id));
+                }
                 setShowZendeskChecker(false);
               }}
             />

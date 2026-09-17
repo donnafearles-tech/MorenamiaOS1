@@ -14,7 +14,11 @@ import {
   SlidersHorizontal,
   LayoutGrid,
   Disc,
-  CheckCircle2
+  CheckCircle2,
+  Building2,
+  Pause,
+  UserCheck,
+  Package
 } from "lucide-react";
 
 interface TaskWheelProps {
@@ -165,10 +169,49 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
     }
   };
 
+  // Helper to get sophisticated status badge info
+  const getStatusInfo = (status: string) => {
+    const s = (status || "").toLowerCase().trim();
+    if (s === "deadline" || s.includes("deadline") || s.includes("alerta") || s.includes("urgente")) {
+      return {
+        label: "DEADLINE",
+        badgeClass: "bg-rose-500/20 text-rose-200 border border-rose-500/40 animate-pulse shadow-[0_0_10px_rgba(244,63,94,0.2)]",
+        icon: <Flame className="w-2.5 h-2.5 text-rose-400 shrink-0" />
+      };
+    }
+    if (s.includes("internal") || s.includes("waiting") || s.includes("bodega") || s.includes("tn")) {
+      return {
+        label: "ESPERA INTERNA",
+        badgeClass: "bg-amber-500/20 text-amber-200 border border-amber-500/40",
+        icon: <Building2 className="w-2.5 h-2.5 text-amber-400 shrink-0" />
+      };
+    }
+    if (s.includes("pausa") || s.includes("pause") || s.includes("hold")) {
+      return {
+        label: "PAUSA BANCARIA",
+        badgeClass: "bg-purple-500/20 text-purple-200 border border-purple-500/40",
+        icon: <Pause className="w-2.5 h-2.5 text-purple-400 shrink-0" />
+      };
+    }
+    if (s.includes("shipment") || s.includes("shipping") || s.includes("envio") || s.includes("envío") || s.includes("tracking")) {
+      return {
+        label: "EN TRÁNSITO",
+        badgeClass: "bg-emerald-500/20 text-emerald-200 border border-emerald-500/40",
+        icon: <Package className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
+      };
+    }
+    // Default: CS Reply / Esperando al Cliente
+    return {
+      label: s === "cs reply" ? "RESP. CLIENTE" : status.toUpperCase(),
+      badgeClass: "bg-cyan-500/15 text-cyan-200 border border-cyan-500/30",
+      icon: <UserCheck className="w-2.5 h-2.5 text-cyan-400 shrink-0" />
+    };
+  };
+
   // Helper to check if a task matches a filter category
   const isTaskInFilter = (t: Task, filterKey: string) => {
     if (filterKey === "TODOS") return true;
-    const statusLower = (t.status || "").toLowerCase();
+    const statusLower = (t.status || "").toLowerCase().trim();
     const pInfo = getPriorityInfo(t.priority);
 
     if (filterKey === "ALERTAS") {
@@ -180,17 +223,24 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
         pInfo.isUrgent
       );
     }
-    if (filterKey === "ESPERANDO") {
+    if (filterKey === "CLIENTE" || filterKey === "ESPERANDO") {
       return (
         statusLower === "cs reply" ||
         statusLower.includes("cs reply") ||
-        statusLower.includes("esperando") ||
-        statusLower.includes("reply")
+        statusLower.includes("cliente") ||
+        (statusLower.includes("reply") && !statusLower.includes("internal"))
+      );
+    }
+    if (filterKey === "INTERNA" || filterKey === "ESPERA INTERNA") {
+      return (
+        statusLower === "internal waiting" ||
+        statusLower.includes("internal") ||
+        statusLower.includes("waiting")
       );
     }
     if (filterKey === "PAUSA") {
+      // Exclusivo para pausas reales (nunca clasificar internal waiting aquí)
       return (
-        statusLower.includes("waiting") ||
         statusLower.includes("pausa") ||
         statusLower.includes("pause") ||
         statusLower.includes("hold")
@@ -259,21 +309,29 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 glass-card p-4">
         {/* State filters */}
         <div className="flex flex-wrap gap-1.5">
-          {["TODOS", "ALERTAS", "ESPERANDO", "PAUSA"].map(filter => {
-            const count = tasks.filter(t => isTaskInFilter(t, filter)).length;
+          {[
+            { key: "TODOS", label: "TODOS", icon: SlidersHorizontal, color: "text-white" },
+            { key: "ALERTAS", label: "ALERTAS", icon: Flame, color: "text-rose-400" },
+            { key: "CLIENTE", label: "CLIENTE (CS REPLY)", icon: UserCheck, color: "text-cyan-400" },
+            { key: "INTERNA", label: "ESPERA INTERNA", icon: Building2, color: "text-amber-400" },
+            { key: "PAUSA", label: "PAUSA BANCARIA", icon: Pause, color: "text-purple-400" },
+          ].map(filter => {
+            const count = tasks.filter(t => isTaskInFilter(t, filter.key)).length;
+            const Icon = filter.icon;
             return (
               <button
-                key={filter}
-                onClick={() => setSelectedFilter(filter)}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold tracking-wide transition-all duration-300 flex items-center gap-1.5 cursor-pointer ${
-                  selectedFilter === filter
+                key={filter.key}
+                onClick={() => setSelectedFilter(filter.key)}
+                className={`px-3 py-2 rounded-xl text-xs font-semibold tracking-wide transition-all duration-300 flex items-center gap-1.5 cursor-pointer ${
+                  selectedFilter === filter.key
                     ? "bg-white/20 border border-white/30 text-white shadow-md font-bold"
                     : "text-white/60 hover:text-white hover:bg-white/5"
                 }`}
               >
-                <span>{filter}</span>
+                <Icon className={`w-3.5 h-3.5 ${filter.color}`} />
+                <span>{filter.label}</span>
                 <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
-                  selectedFilter === filter
+                  selectedFilter === filter.key
                     ? "bg-white/30 text-white"
                     : "bg-white/10 text-white/70"
                 }`}>
@@ -448,9 +506,9 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
             ) : (
               sortedTasks.map((task, idx) => {
                 const pInfo = getPriorityInfo(task.priority);
+                const sInfo = getStatusInfo(task.status);
                 const isFirst = idx === 0;
                 const isDeadline = task.status.toLowerCase() === "deadline" || pInfo.isUrgent;
-                const isWaiting = task.status.toLowerCase().includes("waiting");
 
                 return (
                   <div
@@ -527,16 +585,13 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
                         </span>
 
                         {/* Status Badge */}
-                        <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase font-mono tracking-wider ${
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase font-mono tracking-wider flex items-center gap-1 ${
                           isFirst
                             ? "bg-white/20 text-white border border-white/30"
-                            : isDeadline
-                            ? "bg-rose-500/20 text-rose-200 border border-rose-500/30 animate-pulse"
-                            : isWaiting
-                            ? "bg-amber-500/15 text-amber-200 border border-amber-500/30"
-                            : "bg-white/10 text-white/70 border border-white/10"
+                            : sInfo.badgeClass
                         }`}>
-                          {task.status}
+                          {sInfo.icon}
+                          <span>{sInfo.label}</span>
                         </span>
                       </div>
                       <ChevronRight className="w-4 h-4 text-white/40 group-hover:text-white group-hover:translate-x-0.5 transition-all duration-300" />
@@ -552,6 +607,7 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {sortedTasks.map((task, idx) => {
             const pInfo = getPriorityInfo(task.priority);
+            const sInfo = getStatusInfo(task.status);
             const isFirst = idx === 0;
             const isDeadline = task.status.toLowerCase() === "deadline" || pInfo.isUrgent;
 
@@ -578,10 +634,11 @@ export default function TaskWheel({ tasks, loading, onRefresh, onSelectTask }: T
                       </span>
 
                       {/* Status Badge */}
-                      <span className={`px-2.5 py-0.5 rounded-lg text-[9px] font-extrabold font-mono tracking-wider uppercase ${
-                        isFirst ? "bg-white/20 text-white border border-white/30" : "bg-white/10 text-white/75 border border-white/15"
+                      <span className={`px-2.5 py-0.5 rounded-lg text-[9px] font-extrabold font-mono tracking-wider uppercase flex items-center gap-1 ${
+                        isFirst ? "bg-white/20 text-white border border-white/30" : sInfo.badgeClass
                       }`}>
-                        {task.status}
+                        {sInfo.icon}
+                        <span>{sInfo.label}</span>
                       </span>
                     </div>
                   </div>

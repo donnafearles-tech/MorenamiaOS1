@@ -22,7 +22,20 @@ import {
   User,
   UserCheck,
   Bot,
-  ArrowRight
+  ArrowRight,
+  Building2,
+  Flame,
+  Package,
+  Zap,
+  Maximize2,
+  Minimize2,
+  ChevronDown,
+  ChevronUp,
+  Layers,
+  SlidersHorizontal,
+  Eye,
+  EyeOff,
+  RefreshCw
 } from "lucide-react";
 import ZendeskUserChecker from "./ZendeskUserChecker";
 import RileyToast from "./RileyToast";
@@ -40,21 +53,49 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
   const [task, setTask] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [activeSubTab, setActiveSubTab] = useState<"actions" | "zendesk_user" | "chat" | "cloning">("actions");
+  const [lastSubTab, setLastSubTab] = useState<"actions" | "zendesk_user" | "cloning">("actions");
+
+  const handleSelectSubTab = (tab: "actions" | "zendesk_user" | "chat" | "cloning") => {
+    if (tab !== "chat") {
+      setLastSubTab(tab);
+    }
+    setActiveSubTab(tab);
+  };
+  const [isExpanded, setIsExpanded] = useState<boolean>(false);
+  const [showRightPanel, setShowRightPanel] = useState<boolean>(true);
+  const [copiedSummary, setCopiedSummary] = useState<boolean>(false);
+
+  const handleCopySummary = () => {
+    if (task?.summary) {
+      navigator.clipboard.writeText(task.summary);
+      setCopiedSummary(true);
+      setTimeout(() => setCopiedSummary(false), 2000);
+    }
+  };
 
   const [currentTaskId, setCurrentTaskId] = useState(taskId);
 
+  const [hasAutoShownRileyToast, setHasAutoShownRileyToast] = useState(false);
+
   useEffect(() => {
     setCurrentTaskId(taskId);
+    setHasAutoShownRileyToast(false);
+    setShowRileyToast(false);
   }, [taskId]);
 
   // State for actions
   const [newTimezone, setNewTimezone] = useState("");
   const [clientPhone, setClientPhone] = useState("");
+  const [clientEmail, setClientEmail] = useState("");
+  const [externalId, setExternalId] = useState("");
+  const [clientName, setClientName] = useState("");
   const [zendeskTicketId, setZendeskTicketId] = useState("");
   const [spanishComment, setSpanishComment] = useState("");
   const [bankDays, setBankDays] = useState("4");
   const [submittingAction, setSubmittingAction] = useState(false);
   const [ticketNumber, setTicketNumber] = useState("");
+  // Ref to track if user or Zendesk checker set ticketNumber locally so background fetch doesn't overwrite it
+  const manualTicketRef = useRef<string | null>(null);
 
   // State for Call Scheduling (LOG NUEVO feature)
   const [showScheduleModal, setShowScheduleModal] = useState(false);
@@ -65,8 +106,10 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
   const [scheduleSuccess, setScheduleSuccess] = useState(false);
 
   // State for Closure
-  const [resolutionId, setResolutionId] = useState("550d1479-412d-45f9-b7da-64cd69473af1"); // Default RESOLVED
+  const [resolutionId, setResolutionId] = useState(""); // Preserves exact ClickUp value, no default override
   const [closureComment, setClosureComment] = useState("");
+  const [karlaTrigger, setKarlaTrigger] = useState<{ detected: boolean; applied: boolean; resolutionName: string; resolutionUuid?: string; commentText: string; author?: string } | null>(null);
+  const [checkingKarla, setCheckingKarla] = useState(false);
 
   // State for Riley Agent Evaluation
   const [rileyEvaluation, setRileyEvaluation] = useState<RileyEvaluationResult | null>(null);
@@ -90,14 +133,20 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
     });
 
     setRileyEvaluation(evalResult);
+
+    // Solo mostrar el toast automáticamente una sola vez en la tarea
     if (evalResult.status === "CHECK") {
-      setShowRileyToast(true);
+      if (!hasAutoShownRileyToast) {
+        setShowRileyToast(true);
+        setHasAutoShownRileyToast(true);
+      }
     } else {
       setShowRileyToast(false);
     }
-  }, [resolutionId, task, closureComment, spanishComment]);
+  }, [resolutionId, task, closureComment, spanishComment, hasAutoShownRileyToast]);
 
   const handleApplySuggestedResolution = async (suggested: string) => {
+    setShowRileyToast(false);
     let targetId = "";
     let targetName = suggested;
 
@@ -111,6 +160,7 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
         "DISPUTE": "a148c4e2-b2f3-4b6d-9cf6-6eb8255c6099",
         "REFUND": "e9367f41-cb3b-42f0-b612-6528d02098dc",
         "GIFT": "94dad466-99f5-4f62-b6a1-f7d0a567ffae",
+        "P+R": "cdc84079-b6a3-4665-9161-97d8d7bac5eb",
         "RESOLVED": "550d1479-412d-45f9-b7da-64cd69473af1"
       };
       if (idMap[suggested]) {
@@ -142,9 +192,24 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
     }
   };
 
-  // State for Cloning
+  // State for Cloning & Mandatory Refund Description Fields
   const [cloneMethod, setCloneMethod] = useState("CHECK");
   const [cloneType, setCloneType] = useState("FULL REFUND");
+  const [cloneClient, setCloneClient] = useState("");
+  const [cloneEmail, setCloneEmail] = useState("");
+  const [clonePhone, setClonePhone] = useState("");
+  const [cloneAddress, setCloneAddress] = useState("");
+  const [cloneAmount, setCloneAmount] = useState("");
+  const [cloneBank, setCloneBank] = useState("");
+  const [cloneSwift, setCloneSwift] = useState("");
+  const [cloneBankAccount, setCloneBankAccount] = useState("");
+  const [cloningTask, setCloningTask] = useState(false);
+  const [cloneResult, setCloneResult] = useState<{
+    success: boolean;
+    message: string;
+    taskUrl?: string;
+    taskName?: string;
+  } | null>(null);
 
   // Chat State
   const [chatQuery, setChatQuery] = useState("");
@@ -347,13 +412,16 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
     { id: "94dad466-99f5-4f62-b6a1-f7d0a567ffae", name: "GIFT / REGALO COMPENSACIÓN" },
     { id: "a148c4e2-b2f3-4b6d-9cf6-6eb8255c6099", name: "DISPUTE / DISPUTA BANCARIA" },
     { id: "49bb94ed-70b8-4d8f-80ae-8b4f8ab9b04e", name: "LOST LEAD / CLIENTE PERDIDO" },
-    { id: "cdc84079-b6a3-4665-9161-97d8d7bac5eb", name: "P+R / PENDIENTE + REGLAS" },
+    { id: "cdc84079-b6a3-4665-9161-97d8d7bac5eb", name: "P+R / PRODUCT + REFUND" },
     { id: "550d1479-412d-45f9-b7da-64cd69473af1", name: "RESOLVED / SOLUCIONADO" }
   ];
 
   // Fetch Task Data from ClickUp via our local API route (we can use AI Search or fetch directly if needed, let's query our backend)
   useEffect(() => {
     if (!taskId) return;
+    setResolutionId("");
+    setKarlaTrigger(null);
+    manualTicketRef.current = null;
     fetchTaskDetails();
   }, [taskId]);
 
@@ -399,11 +467,14 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
         chatData = await safeParseResponse(chatRes, chatData);
       }
 
+      const emailResolved = (detailsData as any).email || "";
+
       setTask({
         id: taskId,
         name: detailsData.name,
         description: detailsData.description,
         phone: detailsData.phone,
+        email: emailResolved,
         timezone: detailsData.timezone,
         zendesk_ticket_id: detailsData.zendesk_ticket_id,
         reason: (detailsData as any).reason || "",
@@ -412,13 +483,32 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
       });
 
       if ((detailsData as any).resolution_id) {
-        setResolutionId((detailsData as any).resolution_id);
+        setResolutionId(String((detailsData as any).resolution_id));
+      } else {
+        setResolutionId("");
+      }
+
+      if ((detailsData as any).karla_resolution_trigger) {
+        const kt = (detailsData as any).karla_resolution_trigger;
+        setKarlaTrigger(kt);
+      } else {
+        setKarlaTrigger(null);
       }
 
       setNewTimezone(detailsData.timezone || "EST");
       setClientPhone(detailsData.phone || "");
       const zdTicket = detailsData.zendesk_ticket_id || "";
       setZendeskTicketId(zdTicket);
+
+      // Populate externalId (Invoice #), clientEmail and clientName
+      const extId = (detailsData as any).external_id || (detailsData as any).invoice || "";
+      setExternalId(extId);
+      if (emailResolved) {
+        setClientEmail(emailResolved);
+        setCloneEmail(emailResolved);
+      }
+      const cName = (detailsData as any).client_name || "";
+      setClientName(cName);
 
       // Try to parse and prefill ticket number from name
       const originalName = detailsData.name || "";
@@ -432,7 +522,45 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
           parsedTicket = match[1];
         }
       }
-      setTicketNumber(zdTicket || parsedTicket);
+
+      // If user or Zendesk Checker already selected/typed a ticket number, do not overwrite with stale data
+      if (manualTicketRef.current) {
+        setTicketNumber(manualTicketRef.current);
+      } else if (zdTicket || parsedTicket) {
+        setTicketNumber(zdTicket || parsedTicket);
+      }
+
+      // Extract client name for refund cloning
+      let parsedClient = "";
+      if (originalName.includes("-")) {
+        parsedClient = originalName.split("-").slice(1).join("-").trim();
+      } else {
+        parsedClient = originalName;
+      }
+      setCloneClient(parsedClient);
+      setClonePhone(detailsData.phone || "");
+      setCloneAmount((detailsData as any).amount_usd || "");
+      
+      const desc = detailsData.description || "";
+      const emailMatch = desc.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+      if (emailMatch) {
+        setCloneEmail(emailMatch[0]);
+        if (!emailResolved) setClientEmail(emailMatch[0]);
+      } else if (emailResolved) {
+        setCloneEmail(emailResolved);
+      }
+
+      const addressMatch = desc.match(/(?:Customer\s*Address|Billing\s*address|Home\s*address|Direcci[oó]n):\s*([^\n\r]+)/i);
+      if (addressMatch) setCloneAddress(addressMatch[1].trim());
+
+      const bankMatch = desc.match(/(?:Bank|Banco|Bank\s*name):\s*([^\n\r]+)/i);
+      if (bankMatch) setCloneBank(bankMatch[1].trim());
+
+      const swiftMatch = desc.match(/(?:Swift|SWIFT\s*code|ABA):\s*([^\n\r]+)/i);
+      if (swiftMatch) setCloneSwift(swiftMatch[1].trim());
+
+      const accountMatch = desc.match(/(?:Bank\s*account|Account\s*number|Cuenta|Bank\s*account\s*number):\s*([^\n\r]+)/i);
+      if (accountMatch) setCloneBankAccount(accountMatch[1].trim());
     } catch (err) {
       console.error("Error loading task details:", err);
       setTask({
@@ -464,6 +592,70 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
     }
   };
 
+  const [syncingZendeskData, setSyncingZendeskData] = useState(false);
+
+  const handleSyncFromZendesk = async () => {
+    setSyncingZendeskData(true);
+    try {
+      const res = await fetch("/api/zendesk/sync-client", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_id: currentTaskId,
+          zendesk_ticket_id: zendeskTicketId || ticketNumber,
+          external_id: externalId,
+          phone: clientPhone,
+          email: clientEmail
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (data.email) {
+          setClientEmail(data.email);
+          setCloneEmail(data.email);
+        }
+        if (data.phone) setClientPhone(data.phone);
+        if (data.external_id) setExternalId(data.external_id);
+        if (data.name) setClientName(data.name);
+        if (data.ticket_id) {
+          setZendeskTicketId(String(data.ticket_id));
+          setTicketNumber(String(data.ticket_id));
+          manualTicketRef.current = String(data.ticket_id);
+        }
+        setTask((prev: any) => prev ? {
+          ...prev,
+          email: data.email || prev.email,
+          phone: data.phone || prev.phone,
+          zendesk_ticket_id: data.ticket_id || prev.zendesk_ticket_id
+        } : prev);
+
+        if (showToast) {
+          showToast(
+            data.email 
+              ? `✅ Correo sincronizado desde Zendesk: ${data.email}` 
+              : "✅ Datos sincronizados con Zendesk correctamente",
+            "success"
+          );
+        } else {
+          alert(`✅ Datos sincronizados desde Zendesk exitosamente.\n📧 Correo: ${data.email || 'No registrado en Zendesk'}\n🎟️ Ticket: #${data.ticket_id || zendeskTicketId || 'N/A'}`);
+        }
+        if (onTaskUpdated) {
+          onTaskUpdated(currentTaskId, {
+            email: data.email,
+            phone: data.phone,
+            zendesk_ticket_id: data.ticket_id
+          });
+        }
+      } else {
+        alert(data.error || "No se encontraron datos en Zendesk para sincronizar.");
+      }
+    } catch (err: any) {
+      alert(`Error al sincronizar con Zendesk: ${err.message || err}`);
+    } finally {
+      setSyncingZendeskData(false);
+    }
+  };
+
   const handleUpdateClientInfo = async () => {
     setSubmittingAction(true);
     try {
@@ -473,15 +665,52 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
         body: JSON.stringify({
           task_id: taskId,
           phone: clientPhone,
+          email: clientEmail,
           timezone: newTimezone,
           new_task_id: currentTaskId,
-          zendesk_ticket_id: zendeskTicketId
+          zendesk_ticket_id: zendeskTicketId,
+          external_id: externalId,
+          name: clientName
         })
       });
+      const data = await res.json();
       if (res.ok) {
-        alert("Información del cliente actualizada correctamente.");
+        if (data.email) {
+          setClientEmail(data.email);
+          setCloneEmail(data.email);
+        }
+        if (data.phone) {
+          setClientPhone(data.phone);
+        }
+        if (data.external_id) {
+          setExternalId(data.external_id);
+        }
+        if (data.client_name) {
+          setClientName(data.client_name);
+        }
+        if (data.zendesk_ticket_id) {
+          setZendeskTicketId(String(data.zendesk_ticket_id));
+          setTicketNumber(String(data.zendesk_ticket_id));
+          manualTicketRef.current = String(data.zendesk_ticket_id);
+        }
+        setTask((prev: any) => prev ? {
+          ...prev,
+          email: data.email || clientEmail || prev.email,
+          phone: data.phone || clientPhone || prev.phone,
+          zendesk_ticket_id: data.zendesk_ticket_id || zendeskTicketId || prev.zendesk_ticket_id
+        } : prev);
+
+        const zdNote = data.zendesk_synced 
+          ? `\n\n🎯 Sincronizado en Zendesk: ${data.zendesk_message || 'External ID, Teléfono y Usuario actualizados en Zendesk.'}`
+          : (data.zendesk_message ? `\n\nℹ️ Zendesk: ${data.zendesk_message}` : '');
+        alert(`✅ Información del cliente actualizada exitosamente en ClickUp y Zendesk.${data.email ? `\n📧 Correo: ${data.email}` : ''}${zdNote}`);
         if (onTaskUpdated) {
-          onTaskUpdated(taskId, { tz_tag: newTimezone });
+          onTaskUpdated(taskId, { 
+            tz_tag: newTimezone,
+            email: data.email || clientEmail,
+            phone: data.phone || clientPhone,
+            zendesk_ticket_id: data.zendesk_ticket_id || zendeskTicketId
+          });
         }
         onActionComplete(true); // Silent background refresh
         if (currentTaskId && currentTaskId.trim() !== taskId) {
@@ -491,11 +720,11 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
           fetchTaskDetails();
         }
       } else {
-        const errData = await res.json();
-        alert(`Error: ${errData.error || "Ocurrió un error"}`);
+        alert(`Error: ${data.error || "Ocurrió un error"}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      alert(`Error al actualizar: ${err.message || err}`);
     } finally {
       setSubmittingAction(false);
     }
@@ -670,15 +899,10 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
   };
 
   const handleCloseTask = async () => {
-    const finalTicketNum = (ticketNumber || zendeskTicketId).trim();
-    if (!closureComment.trim()) {
-      alert("Por favor añade un comentario de cierre para documentar el caso.");
-      return;
-    }
-    if (!finalTicketNum) {
-      alert("Por favor ingresa el número de ticket para poder reacomodar el título.");
-      return;
-    }
+    const finalTicketNum = (ticketNumber || zendeskTicketId || "").trim();
+    const selectedRes = resolutions.find(r => r.id === resolutionId);
+    const selectedResName = selectedRes?.name || "RESOLVED";
+    const effectiveComment = closureComment.trim() || `Caso resuelto y cerrado (${selectedResName})`;
 
     if (rileyEvaluation?.status === "CHECK") {
       const confirmClose = window.confirm(
@@ -698,50 +922,53 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task_id: taskId,
-          spanish_comment: closureComment,
+          spanish_comment: effectiveComment,
           resolution_id: resolutionId,
           ticket_number: finalTicketNum,
-          riley_status: rileyEvaluation?.status || "CHECK"
+          riley_status: rileyEvaluation?.status || "OK"
         })
       });
+
       if (res.ok) {
         const data = await res.json();
         setClosureComment("");
         
-        // Build communication toast message
-        let toastMsg = "";
-        let toastType: "success" | "error" | "info" = "success";
-        
+        let toastMsg = `✅ ¡Ticket cerrado exitosamente!`;
         if (data.zendesk_status === "success") {
-          toastMsg = `¡ClickUp y Zendesk Sincronizados!\n\n• ClickUp: Tarea cerrada exitosamente.\n• Zendesk: ${data.zendesk_message}`;
-          toastType = "success";
+          toastMsg += `\n• ClickUp: Cerrado con resolución ${selectedResName}\n• Zendesk: ${data.zendesk_message}`;
         } else if (data.zendesk_status === "failed") {
-          toastMsg = `⚠️ ClickUp Cerrado, pero falló Zendesk.\n\n• ClickUp: Tarea cerrada exitosamente.\n• Zendesk: ${data.zendesk_message}`;
-          toastType = "error";
+          toastMsg += `\n• ClickUp: Cerrado con resolución ${selectedResName}\n• Zendesk: ${data.zendesk_message}`;
         } else {
-          toastMsg = `¡Tarea cerrada en ClickUp!\n\n• ClickUp: Tarea cerrada exitosamente.\n• Zendesk: ${data.zendesk_message}`;
-          toastType = "info";
+          toastMsg += `\n• ClickUp: Cerrado con resolución ${selectedResName}`;
         }
 
         if (showToast) {
-          showToast(toastMsg, toastType);
-        } else {
-          // Fallback to standard alert
-          alert(toastMsg);
+          showToast(toastMsg, data.zendesk_status === "failed" ? "info" : "success");
         }
 
-        onActionComplete();
+        onActionComplete(true);
         onClose();
+      } else {
+        const errData = await res.json().catch(() => ({ error: "Error de servidor al cerrar el ticket" }));
+        if (showToast) {
+          showToast(`⚠️ No se pudo cerrar el ticket: ${errData.error || res.statusText}`, "error");
+        } else {
+          alert(`Error al cerrar ticket: ${errData.error || res.statusText}`);
+        }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      if (showToast) {
+        showToast(`⚠️ Error al procesar el cierre: ${err.message}`, "error");
+      }
     } finally {
       setSubmittingAction(false);
     }
   };
 
   const handleCloneRefund = async () => {
-    setSubmittingAction(true);
+    setCloningTask(true);
+    setCloneResult(null);
     try {
       const res = await fetch(`/api/duplicate-refund`, {
         method: "POST",
@@ -749,27 +976,58 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
         body: JSON.stringify({
           task_id: taskId,
           method: cloneMethod,
-          type: cloneType
+          type: cloneType,
+          client: cloneClient,
+          email: cloneEmail,
+          phone: clonePhone,
+          address: cloneAddress,
+          amount: cloneAmount,
+          bank: cloneBank,
+          swift: cloneSwift,
+          bank_account: cloneBankAccount
         })
       });
       const data = await res.json();
       if (res.ok) {
-        alert(`¡Clonado con éxito!\nNuevo Nombre: ${data.new_name}\nSe ha asignado a Lorenzo para procesamiento.`);
-        onActionComplete();
+        setCloneResult({
+          success: true,
+          message: `¡Tarea duplicada con éxito en la lista de Lorenzo!`,
+          taskUrl: data.new_task_url,
+          taskName: data.new_name
+        });
+        if (showToast) {
+          showToast(`¡Clonado con éxito! Asignado a Lorenzo: ${data.new_name}`, "success");
+        }
+        onActionComplete(true);
       } else {
-        alert(`Error al clonar: ${data.error}`);
+        setCloneResult({
+          success: false,
+          message: data.error || "No se pudo duplicar la tarea en ClickUp."
+        });
+        if (showToast) {
+          showToast(`Error al clonar: ${data.error || "Fallo en ClickUp"}`, "error");
+        }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setCloneResult({
+        success: false,
+        message: `Error de conexión: ${err.message || "Error desconocido"}`
+      });
+      if (showToast) {
+        showToast(`Error de conexión al clonar: ${err.message}`, "error");
+      }
     } finally {
-      setSubmittingAction(false);
+      setCloningTask(false);
     }
   };
 
-  const handleSendChat = async () => {
-    if (!chatQuery.trim()) return;
-    const userQuery = chatQuery;
-    setChatQuery("");
+  const handleSendChat = async (customQuery?: string) => {
+    const userQuery = (typeof customQuery === "string" ? customQuery : chatQuery).trim();
+    if (!userQuery) return;
+    if (!customQuery) {
+      setChatQuery("");
+    }
     
     setChatMessages(prev => [...prev, { sender: "user", text: userQuery, timestamp: new Date() }]);
     setChatLoading(true);
@@ -792,151 +1050,287 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
   const activeZdId = (zendeskTicketId || ticketNumber || "").trim().replace(/\D/g, "");
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex justify-end z-50 animate-fade-in">
-      <div className="w-full max-w-2xl bg-slate-950/80 backdrop-blur-2xl border-l border-white/15 h-full flex flex-col justify-between shadow-[0_0_50px_rgba(0,0,0,0.8)] relative">
+    <div className={`fixed inset-0 bg-black/70 backdrop-blur-md z-50 animate-fade-in transition-all duration-300 flex ${
+      isExpanded ? "p-0 md:p-2 items-center justify-center" : "justify-end"
+    }`}>
+      <div className={`w-full bg-slate-950/95 backdrop-blur-2xl h-full flex flex-col justify-between shadow-[0_0_50px_rgba(0,0,0,0.8)] relative transition-all duration-300 ${
+        isExpanded 
+          ? "max-w-none w-full h-full md:rounded-2xl md:border md:border-white/20 overflow-hidden" 
+          : "max-w-2xl border-l border-white/15"
+      }`}>
         
-        {/* Modal Header */}
-        <div className="p-6 border-b border-white/10 flex items-center justify-between bg-white/5">
-          <div className="min-w-0 pr-4 space-y-2 flex-1">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <span className="text-[10px] font-mono font-bold tracking-widest text-white/60 uppercase block">Detalle y Acciones Rápidas</span>
-              
-              {/* Top Client & Agent Live Local Time Badge */}
-              <div className="flex items-center gap-2 bg-cyan-950/70 border border-cyan-500/40 px-3 py-1 rounded-xl text-xs font-mono shadow-[0_0_12px_rgba(6,182,212,0.15)] flex-wrap">
-                <Clock className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-                <span className="text-white/60 text-[11px]">Hora Cliente:</span>
-                <span className="text-cyan-300 font-bold text-sm">{clientLiveTime}</span>
-                <span className="text-xs font-bold text-cyan-400/90 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">{effectiveTz}</span>
+        {/* Unified Intelligent Header Bar */}
+        <div className="border-b border-white/10 bg-slate-900/95 backdrop-blur-xl shrink-0 transition-all duration-200">
+          {/* Main Hero Header: Tabs at Top Left, Window Controls & Clocks at Top Right, followed by Ticket Info & Status */}
+          <div className="p-4 md:p-5 bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 flex flex-col gap-3.5 shadow-lg relative z-10">
+            
+            {/* Top Row: Timezone Clocks at Left, Tabs Toolbar, and Window Controls at Right */}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              {/* Left Side: Clocks & Tabs */}
+              <div className="flex items-center gap-2.5 flex-wrap">
+                {/* High-Legibility Timezone Clocks (Moved to Left of the Screen) */}
+                <div className="flex items-center gap-2.5 bg-black/60 border border-white/15 px-3 py-1.5 rounded-xl text-xs font-mono shadow-inner shrink-0">
+                  <div className="flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+                    <span className="text-white/50 text-[10px] uppercase font-bold">Cliente:</span>
+                    <span className="text-cyan-300 font-bold text-xs">{clientLiveTime}</span>
+                    <span className="text-[10px] text-cyan-300 bg-cyan-500/20 px-1.5 py-0.5 rounded font-bold border border-cyan-500/40">{effectiveTz}</span>
+                  </div>
+                  <div className="w-[1px] h-3.5 bg-white/20" />
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-white/50 text-[10px] uppercase font-bold">Agente:</span>
+                    <span className="text-emerald-300 font-bold text-xs">{agentLiveTime}</span>
+                  </div>
+                </div>
 
-                <span className="text-white/20 text-xs px-1">|</span>
-
-                <span className="text-white/60 text-[11px]">Tu Hora (Agente):</span>
-                <span className="text-emerald-300 font-bold text-sm">{agentLiveTime}</span>
-
-                {(clientPhone || task?.phone) && (
-                  <span className="text-white/70 text-xs border-l border-white/20 pl-2 ml-0.5 flex items-center gap-1 font-sans">
-                    <Phone className="w-3 h-3 text-cyan-400/80" />
-                    <span className="font-mono font-semibold">{clientPhone || task?.phone}</span>
-                  </span>
-                )}
+                {/* Tabs Toolbar - Responsive Wrapping */}
+                <div className="flex flex-wrap items-center gap-1.5 bg-slate-950/90 p-1 rounded-xl border border-white/15 shadow-inner max-w-full">
+                  {[
+                    { id: "actions", label: "Acciones ClickUp", icon: Zap },
+                    { id: "zendesk_user", label: "Verificar Usuario Zendesk", icon: UserCheck },
+                    { id: "chat", label: "Consultar con Donna IA", icon: Bot },
+                    { id: "cloning", label: "Duplicar a Reembolsos", icon: Plus }
+                  ].map(tab => {
+                    const IconComponent = tab.icon;
+                    const isActive = activeSubTab === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={() => handleSelectSubTab(tab.id as any)}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-all flex items-center gap-1.5 cursor-pointer text-left ${
+                          isActive 
+                            ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm" 
+                            : "text-white/60 hover:text-white hover:bg-white/5 border border-transparent"
+                        }`}
+                      >
+                        <IconComponent className={`w-3.5 h-3.5 shrink-0 ${isActive ? "text-cyan-400" : "text-white/50"}`} />
+                        <span className="leading-snug break-words">{tab.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
 
-            <h3 className="text-base font-bold text-white leading-snug truncate">
-              {loading ? `Cargando Ticket #${taskId}...` : (task?.name || `Ticket #${taskId}`)}
-            </h3>
-            {!loading && (
-              <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                <a
-                  href={`https://app.clickup.com/t/${taskId}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm group"
+              {/* Right Side: Window Action Buttons */}
+              <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+                {/* Fullscreen / Expand Toggle */}
+                <button
+                  onClick={() => setIsExpanded(prev => !prev)}
+                  className={`p-1.5 px-2.5 rounded-xl border text-xs font-mono flex items-center gap-1.5 transition-all cursor-pointer ${
+                    isExpanded 
+                      ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30" 
+                      : "bg-white/5 border-white/10 text-white/70 hover:text-white hover:bg-white/10"
+                  }`}
+                  title={isExpanded ? "Reducir a panel lateral" : "Aprovechar toda la pantalla"}
                 >
-                  <ExternalLink className="w-3.5 h-3.5 text-purple-400 group-hover:scale-110 transition-transform" />
-                  Abrir en ClickUp (#{taskId})
-                </a>
-
-                {activeZdId ? (
-                  <a
-                    href={`https://vipcosmetics.zendesk.com/agent/tickets/${activeZdId}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm group"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5 text-emerald-400 group-hover:scale-110 transition-transform" />
-                    Abrir en Zendesk (#{activeZdId})
-                  </a>
-                ) : (
-                  <span className="text-[11px] text-amber-400/80 font-mono flex items-center gap-1 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
-                    <AlertTriangle className="w-3 h-3 text-amber-400" /> Sin ID de Zendesk
+                  {isExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                  <span className="hidden xl:inline text-[11px] font-semibold">
+                    {isExpanded ? "Reducir" : "Pantalla Completa"}
                   </span>
+                </button>
+
+                {/* Close Modal */}
+                <button 
+                  onClick={onClose}
+                  className="p-1.5 px-2 rounded-xl bg-white/5 border border-white/10 text-white/70 hover:text-white hover:bg-white/15 transition-all cursor-pointer"
+                  title="Cerrar modal"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Bottom Row of Header: Ticket Identity, Status Badge, Direct Links & Prominent Title */}
+            <div className="space-y-2 pt-1 border-t border-white/5">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                {/* Prominent Ticket ID */}
+                <span className="text-xs font-mono font-bold tracking-wider text-cyan-200 uppercase bg-cyan-950/90 border border-cyan-400/60 px-3 py-1 rounded-lg shadow-[0_0_12px_rgba(6,182,212,0.25)] shrink-0 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                  Ticket #{taskId}
+                </span>
+
+                {/* Status Badge - High Prominence */}
+                {!loading && (() => {
+                  const statusStr = (task?.status?.status || task?.status || "").toLowerCase().trim();
+                  let badge = {
+                    label: "RESP. CLIENTE",
+                    badgeClass: "bg-cyan-500/25 text-cyan-100 border-cyan-400/60 shadow-[0_0_12px_rgba(6,182,212,0.25)]",
+                    icon: <UserCheck className="w-3.5 h-3.5 text-cyan-300" />
+                  };
+                  if (statusStr === "deadline" || statusStr.includes("deadline") || statusStr.includes("alerta") || statusStr.includes("urgente")) {
+                    badge = {
+                      label: "DEADLINE",
+                      badgeClass: "bg-rose-500/30 text-rose-100 border-rose-400/80 shadow-[0_0_16px_rgba(244,63,94,0.4)] animate-pulse",
+                      icon: <Flame className="w-3.5 h-3.5 text-rose-300" />
+                    };
+                  } else if (statusStr.includes("internal") || statusStr.includes("waiting") || statusStr.includes("bodega") || statusStr.includes("tn")) {
+                    badge = {
+                      label: "ESPERA INTERNA",
+                      badgeClass: "bg-amber-500/25 text-amber-100 border-amber-400/60 shadow-[0_0_12px_rgba(245,158,11,0.25)]",
+                      icon: <Building2 className="w-3.5 h-3.5 text-amber-300" />
+                    };
+                  } else if (statusStr.includes("pausa") || statusStr.includes("pause") || statusStr.includes("hold")) {
+                    badge = {
+                      label: "PAUSA BANCARIA",
+                      badgeClass: "bg-purple-500/25 text-purple-100 border-purple-400/60 shadow-[0_0_12px_rgba(168,85,247,0.25)]",
+                      icon: <Pause className="w-3.5 h-3.5 text-purple-300" />
+                    };
+                  } else if (statusStr.includes("shipment") || statusStr.includes("shipping") || statusStr.includes("envio") || statusStr.includes("envío") || statusStr.includes("tracking")) {
+                    badge = {
+                      label: "EN TRÁNSITO",
+                      badgeClass: "bg-emerald-500/25 text-emerald-100 border-emerald-400/60 shadow-[0_0_12px_rgba(16,185,129,0.25)]",
+                      icon: <Package className="w-3.5 h-3.5 text-emerald-300" />
+                    };
+                  } else if (statusStr) {
+                    badge = {
+                      label: statusStr.toUpperCase(),
+                      badgeClass: "bg-white/20 text-white border-white/30",
+                      icon: <UserCheck className="w-3.5 h-3.5 text-white/80" />
+                    };
+                  }
+
+                  return (
+                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-mono font-bold border shadow-sm ${badge.badgeClass}`}>
+                      {badge.icon}
+                      <span>{badge.label}</span>
+                    </span>
+                  );
+                })()}
+
+                {/* Direct Links (ClickUp & Zendesk) - Positioned at the extreme right */}
+                {!loading && (
+                  <div className="flex items-center gap-2 ml-auto">
+                    <a
+                      href={`https://app.clickup.com/t/${taskId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-500/20 hover:bg-purple-500/35 text-purple-200 border border-purple-400/50 rounded-lg text-xs font-mono font-semibold transition-all cursor-pointer shadow-sm hover:scale-102"
+                      title="Abrir en ClickUp"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5 text-purple-300" />
+                      <span>ClickUp</span>
+                    </a>
+
+                    {activeZdId && (
+                      <a
+                        href={`https://vipcosmetics.zendesk.com/agent/tickets/${activeZdId}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-200 border border-emerald-400/50 rounded-lg text-xs font-mono font-semibold transition-all cursor-pointer shadow-sm hover:scale-102"
+                        title="Abrir en Zendesk"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 text-emerald-300" />
+                        <span>ZD #{activeZdId}</span>
+                      </a>
+                    )}
+                  </div>
                 )}
               </div>
-            )}
-          </div>
-          <button 
-            onClick={onClose}
-            className="p-2 rounded-xl bg-white/10 border border-white/20 text-white/80 hover:text-white hover:bg-white/20 transition-all cursor-pointer shrink-0 ml-2"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
 
-        {/* Modal Content Tabs */}
-        <div className="flex border-b border-white/10 bg-white/5">
-          {[
-            { id: "actions", label: "Acciones ClickUp" },
-            { id: "zendesk_user", label: "Verificar Usuario Zendesk" },
-            { id: "chat", label: "Consultar con Donna IA" },
-            { id: "cloning", label: "Duplicar a Reembolsos" }
-          ].map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveSubTab(tab.id as any)}
-              className={`flex-1 py-3 text-xs font-semibold tracking-wider uppercase transition-all duration-300 ${
-                activeSubTab === tab.id 
-                  ? "border-b-2 border-white text-white bg-white/10" 
-                  : "text-white/50 hover:text-white hover:bg-white/5"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Scrollable Content Pane */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {loading ? (
-            <div className="flex flex-col items-center justify-center h-64 space-y-3">
-              <Loader2 className="w-8 h-8 text-white/60 animate-spin" />
-              <p className="text-xs text-white/50 font-mono">Descargando historial de ClickUp...</p>
+              {/* Title / Subject - Large, High Contrast, Prominent */}
+              <h3 className="text-base sm:text-lg md:text-xl font-extrabold text-white tracking-tight leading-snug drop-shadow-sm" title={task?.name || `Ticket #${taskId}`}>
+                {loading ? "Cargando ticket..." : (task?.name || `Ticket #${taskId}`)}
+              </h3>
             </div>
-          ) : (
-            <>
-              {/* Executive Case Summary */}
-              <div className="bg-white/5 border border-white/15 p-5 rounded-xl space-y-2">
-                <div className="flex items-center gap-2 text-white font-semibold text-xs uppercase tracking-wider font-mono">
-                  <Sparkles className="w-4 h-4 text-white/80 animate-pulse" />
-                  Donna AI: Resumen del Caso
-                </div>
-                <p className="text-xs text-white/80 leading-relaxed font-sans whitespace-pre-wrap">
-                  {task?.summary}
-                </p>
+          </div>
+        </div>
+
+        {/* Main Content Area: Split View in Fullscreen for Donna IA & Resumen del Caso */}
+        <div className={`flex-1 overflow-hidden flex ${isExpanded ? "flex-col lg:flex-row min-h-0" : "flex-col"}`}>
+          {/* Main / Left Content Pane (El demás DOM) */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-6 min-w-0">
+            {loading ? (
+              <div className="flex flex-col items-center justify-center h-64 space-y-3">
+                <Loader2 className="w-8 h-8 text-white/60 animate-spin" />
+                <p className="text-xs text-white/50 font-mono">Descargando historial de ClickUp...</p>
               </div>
+            ) : (
+              <>
+                {/* Executive Case Summary: Shown here when NOT in fullscreen (in fullscreen it is placed in the dedicated right panel) */}
+                {!isExpanded && (
+                  <div className="bg-white/5 border border-white/15 p-5 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between text-white font-semibold text-xs uppercase tracking-wider font-mono">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-cyan-400 animate-pulse" />
+                        <span>Donna AI: Resumen del Caso</span>
+                      </div>
+                      {task?.summary && (
+                        <button
+                          type="button"
+                          onClick={handleCopySummary}
+                          className="text-[10px] text-white/50 hover:text-white flex items-center gap-1 font-mono transition-colors cursor-pointer"
+                          title="Copiar resumen del caso"
+                        >
+                          {copiedSummary ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                          <span>{copiedSummary ? "Copiado" : "Copiar"}</span>
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-white/80 leading-relaxed font-sans whitespace-pre-wrap">
+                      {task?.summary}
+                    </p>
+                  </div>
+                )}
 
-              {/* Client Info Overview */}
-              {!loading && task && (
-                <div className="bg-cyan-950/20 border border-cyan-500/20 p-4 rounded-xl flex flex-wrap gap-4 items-center justify-between text-xs">
-                  <div className="flex items-center gap-2 font-mono text-white/70">
-                    <Phone className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Teléfono:</span>
-                    <span className="text-white font-bold">{clientPhone || task.phone || "No asignado"}</span>
+                {/* Client Info Overview */}
+                {!loading && task && (
+                  <div className="bg-cyan-950/20 border border-cyan-500/20 p-4 rounded-xl flex flex-wrap gap-4 items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 font-mono text-white/70">
+                      <Phone className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Teléfono:</span>
+                      <span className="text-white font-bold">{clientPhone || task.phone || "No asignado"}</span>
+                    </div>
+                    <div className="flex items-center gap-2 font-mono text-white/70">
+                      <span className="text-cyan-400">✉️</span>
+                      <span>Correo:</span>
+                      <span className="text-white font-bold">{clientEmail || task.email || "Sin correo"}</span>
+                    </div>
+                    <div className="flex items-center gap-2 font-mono text-white/70">
+                      <MapPin className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Zona Horaria:</span>
+                      <span className="text-cyan-300 font-bold">{effectiveTz}</span>
+                    </div>
+                    <div className="flex items-center gap-2 font-mono text-white/70">
+                      <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Hora Local Cliente:</span>
+                      <span className="text-cyan-300 font-bold">{clientLiveTime}</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 font-mono text-white/70">
-                    <MapPin className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Zona Horaria:</span>
-                    <span className="text-cyan-300 font-bold">{effectiveTz}</span>
-                  </div>
-                  <div className="flex items-center gap-2 font-mono text-white/70">
-                    <Clock className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Hora Local Cliente:</span>
-                    <span className="text-cyan-300 font-bold">{clientLiveTime}</span>
-                  </div>
-                </div>
-              )}
+                )}
 
-              {/* Tab 1: Actions */}
-              {activeSubTab === "actions" && (
+                {/* Tab 1: Actions */}
+                {(activeSubTab === "actions" || (isExpanded && activeSubTab === "chat" && lastSubTab === "actions")) && (
                 <div className="space-y-6">
-                  {/* Client Info Update Widget (Phone and Timezone) */}
+                  {/* Client Info Update Widget (Phone, Email, External ID, Timezone, IDs) */}
                   <div className="glass-card p-4 space-y-4">
-                    <label className="text-xs font-bold text-white/60 uppercase tracking-wide flex items-center gap-1.5">
-                      <Phone className="w-3.5 h-3.5 text-white/50" /> Datos del Cliente y Horario
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <label className="text-xs font-bold text-white/80 uppercase tracking-wide flex items-center gap-1.5 font-mono">
+                        <Phone className="w-3.5 h-3.5 text-cyan-400" /> Datos del Cliente y Sincronización Zendesk
+                      </label>
+                      <span className="text-[10px] font-bold text-emerald-400/90 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <Zap className="w-2.5 h-2.5" /> Auto-sync con Perfil de Zendesk & ClickUp
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+                      {/* External ID / Invoice # */}
                       <div className="space-y-1">
-                        <span className="text-[10px] font-bold text-white/50 uppercase block mb-1">Número de Teléfono</span>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-white/70 uppercase block">External ID / Factura</span>
+                          <span className="text-[9px] font-mono text-cyan-300">Zendesk & ClickUp</span>
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="Ej. 123456"
+                          value={externalId}
+                          onChange={(e) => setExternalId(e.target.value)}
+                          className="w-full bg-white/5 border border-cyan-500/30 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-cyan-400 focus:bg-cyan-950/20"
+                        />
+                      </div>
+
+                      {/* Phone */}
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold text-white/70 uppercase block mb-1">Número de Teléfono</span>
                         <input
                           type="tel"
                           placeholder="Ingresa teléfono..."
@@ -945,8 +1339,34 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                           className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/30"
                         />
                       </div>
+
+                      {/* Email */}
                       <div className="space-y-1">
-                        <span className="text-[10px] font-bold text-white/50 uppercase block mb-1">Zona Horaria (ClickUp)</span>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-white/70 uppercase block">Correo Electrónico</span>
+                          <button
+                            type="button"
+                            onClick={handleSyncFromZendesk}
+                            disabled={syncingZendeskData}
+                            className="text-[9px] text-cyan-400 hover:text-cyan-300 font-bold flex items-center gap-1 cursor-pointer transition-colors px-1.5 py-0.5 rounded bg-cyan-950/40 border border-cyan-500/20"
+                            title="Sincronizar correo y datos desde Zendesk"
+                          >
+                            <RefreshCw className={`w-2.5 h-2.5 ${syncingZendeskData ? "animate-spin" : ""}`} /> 
+                            {syncingZendeskData ? "Sincronizando..." : "Sincronizar Zendesk"}
+                          </button>
+                        </div>
+                        <input
+                          type="email"
+                          placeholder="Ingresa correo electrónico..."
+                          value={clientEmail}
+                          onChange={(e) => setClientEmail(e.target.value)}
+                          className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/30"
+                        />
+                      </div>
+
+                      {/* Timezone */}
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold text-white/70 uppercase block mb-1">Zona Horaria (ClickUp)</span>
                         <select
                           value={newTimezone}
                           onChange={(e) => setNewTimezone(e.target.value)}
@@ -958,8 +1378,10 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                           ))}
                         </select>
                       </div>
+
+                      {/* ClickUp Task ID */}
                       <div className="space-y-1">
-                        <span className="text-[10px] font-bold text-white/50 uppercase block mb-1">ID de Tarea ClickUp</span>
+                        <span className="text-[10px] font-bold text-white/70 uppercase block mb-1">ID de Tarea ClickUp</span>
                         <input
                           type="text"
                           placeholder="ID de Tarea ClickUp..."
@@ -968,9 +1390,11 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                           className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/30"
                         />
                       </div>
+
+                      {/* Zendesk Ticket ID */}
                       <div className="space-y-1">
                         <div className="flex items-center justify-between mb-1">
-                          <span className="text-[10px] font-bold text-white/50 uppercase block">ID Ticket Zendesk</span>
+                          <span className="text-[10px] font-bold text-white/70 uppercase block">ID Ticket Zendesk</span>
                           {activeZdId && (
                             <a
                               href={`https://vipcosmetics.zendesk.com/agent/tickets/${activeZdId}`}
@@ -997,12 +1421,21 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                         />
                       </div>
                     </div>
+
                     <button
                       onClick={handleUpdateClientInfo}
                       disabled={submittingAction}
-                      className="w-full py-2 bg-white/10 text-white border border-white/20 rounded-xl text-xs font-bold hover:bg-white/20 transition-all cursor-pointer flex items-center justify-center gap-2"
+                      className="w-full py-2.5 bg-gradient-to-r from-emerald-500/30 to-cyan-500/30 hover:from-emerald-500/40 hover:to-cyan-500/40 text-white border border-emerald-500/40 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
                     >
-                      <Save className="w-3.5 h-3.5" /> Actualizar Datos del Cliente
+                      {submittingAction ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-emerald-400" /> Sincronizando en Zendesk & ClickUp...
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-4 h-4 text-emerald-400" /> Guardar y Sincronizar en Zendesk & ClickUp
+                        </>
+                      )}
                     </button>
                   </div>
 
@@ -1093,20 +1526,101 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                         <Lock className="w-4 h-4 text-rose-400" />
                         Cerrar Caso y Guardar Resolución
                       </div>
-                      {rileyEvaluation && (
+                      <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => setShowRileyToast(true)}
-                          className={`text-[10px] font-mono font-bold px-2.5 py-1 rounded-full border flex items-center gap-1.5 transition-all cursor-pointer ${
-                            rileyEvaluation.status === "CHECK"
-                              ? "bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30 animate-pulse"
-                              : "bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30"
-                          }`}
+                          onClick={async () => {
+                            if (!taskId) return;
+                            setCheckingKarla(true);
+                            try {
+                              const res = await fetch("/api/check-karla-resolution", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ task_id: taskId })
+                              });
+                              const data = await res.json();
+                              if (data.karla_trigger) {
+                                setKarlaTrigger(data.karla_trigger);
+                                if (data.karla_trigger.resolutionUuid) {
+                                  setResolutionId(data.karla_trigger.resolutionUuid);
+                                }
+                                showToast?.(`⚡ Trigger de Karla detectado: ${data.karla_trigger.resolutionName}`, "success");
+                              } else {
+                                showToast?.(`ℹ️ No se detectaron instrucciones de cambio de resolución por Karla en los comentarios.`, "info");
+                              }
+                            } catch (err) {
+                              console.error("Error comprobando comentarios de Karla:", err);
+                            } finally {
+                              setCheckingKarla(false);
+                            }
+                          }}
+                          disabled={checkingKarla}
+                          title="Escanear comentarios de Karla para auto-cambiar resolución"
+                          className="text-[10px] font-mono font-bold px-2.5 py-1 rounded-full border border-purple-500/40 bg-purple-500/20 text-purple-200 hover:bg-purple-500/30 flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
                         >
-                          🤖 Riley: {rileyEvaluation.status}
+                          {checkingKarla ? <Loader2 className="w-3 h-3 animate-spin text-purple-300" /> : <Zap className="w-3 h-3 text-purple-400" />}
+                          Trigger Karla
                         </button>
-                      )}
+
+                        {rileyEvaluation && (
+                          <button
+                            type="button"
+                            onClick={() => setShowRileyToast(true)}
+                            className={`text-[10px] font-mono font-bold px-2.5 py-1 rounded-full border flex items-center gap-1.5 transition-all cursor-pointer ${
+                              rileyEvaluation.status === "CHECK"
+                                ? "bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30 animate-pulse"
+                                : "bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30"
+                            }`}
+                          >
+                            🤖 Riley: {rileyEvaluation.status}
+                          </button>
+                        )}
+                      </div>
                     </div>
+
+                    {/* Karla Trigger Banner if detected */}
+                    {karlaTrigger && (
+                      <div className="bg-purple-950/40 border border-purple-500/40 rounded-xl p-3 flex items-start gap-2.5 text-xs text-purple-200 animate-fadeIn">
+                        <Sparkles className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+                        <div className="flex-1 space-y-1.5">
+                          <div className="flex items-center justify-between flex-wrap gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-bold text-purple-300 text-[11px]">⚡ Sugerencia de Resolución en Comentarios:</span>
+                              <span className="bg-purple-500/30 text-purple-200 border border-purple-400/40 px-2 py-0.5 rounded text-[10px] font-mono font-bold">
+                                {karlaTrigger.resolutionName}
+                              </span>
+                              <span className="text-[10px] text-purple-400">
+                                (Por {karlaTrigger.author || "Karla"})
+                              </span>
+                            </div>
+                            {karlaTrigger.resolutionUuid && karlaTrigger.resolutionUuid !== resolutionId && (
+                              <button
+                                type="button"
+                                onClick={() => handleApplySuggestedResolution(karlaTrigger.resolutionName)}
+                                className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[10px] font-bold transition-all shadow-sm flex items-center gap-1 cursor-pointer"
+                              >
+                                Aplicar a ClickUp
+                              </button>
+                            )}
+                          </div>
+                          <p className="text-white/80 text-[11px] italic bg-black/20 p-1.5 rounded border border-white/5 font-mono">
+                            "{karlaTrigger.commentText}"
+                          </p>
+                          <div className="text-[10px] font-semibold flex items-center gap-1">
+                            {karlaTrigger.resolutionUuid === resolutionId ? (
+                              <span className="text-emerald-400 inline-flex items-center gap-1">
+                                <Check className="w-3 h-3" />
+                                La resolución actual en ClickUp ya es {karlaTrigger.resolutionName}.
+                              </span>
+                            ) : (
+                              <span className="text-amber-300 inline-flex items-center gap-1">
+                                ℹ️ Comentario detectado. Haz clic en "Aplicar a ClickUp" para cambiar la resolución.
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="space-y-1.5">
@@ -1116,7 +1630,7 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                           onChange={async (e) => {
                             const newResId = e.target.value;
                             setResolutionId(newResId);
-                            if (taskId) {
+                            if (taskId && newResId) {
                               try {
                                 const res = await fetch("/api/update-resolution", {
                                   method: "POST",
@@ -1134,6 +1648,7 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                           }}
                           className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-rose-400"
                         >
+                          <option value="" className="bg-slate-900 text-white/40">-- Sin resolución en ClickUp --</option>
                           {resolutions.map(res => (
                             <option key={res.id} value={res.id} className="bg-slate-900">{res.name}</option>
                           ))}
@@ -1141,12 +1656,22 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                       </div>
 
                       <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-white/50 uppercase">Número de Ticket</label>
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-bold text-white/50 uppercase">Número de Ticket</label>
+                          {ticketNumber && (
+                            <span className="text-[9px] font-mono text-emerald-400 font-semibold flex items-center gap-1">
+                              ✓ Zendesk #{ticketNumber}
+                            </span>
+                          )}
+                        </div>
                         <input
                           type="text"
-                          placeholder="ej. M10502"
-                          value={ticketNumber || zendeskTicketId}
-                          onChange={(e) => setTicketNumber(e.target.value)}
+                          placeholder="ej. 104687"
+                          value={ticketNumber}
+                          onChange={(e) => {
+                            setTicketNumber(e.target.value);
+                            manualTicketRef.current = e.target.value;
+                          }}
                           className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-white/35 focus:outline-none focus:border-rose-400"
                         />
                       </div>
@@ -1188,31 +1713,57 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                     <button
                       onClick={handleCloseTask}
                       disabled={submittingAction}
-                      className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
+                      className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-rose-900/30"
                     >
-                      Cerrar Ticket Permanentemente
+                      {submittingAction ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Cerrando ticket...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Lock className="w-3.5 h-3.5" />
+                          <span>Cerrar ticket</span>
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>
               )}
 
               {/* Tab: Zendesk User Checker */}
-              {activeSubTab === "zendesk_user" && (
+              {(activeSubTab === "zendesk_user" || (isExpanded && activeSubTab === "chat" && lastSubTab === "zendesk_user")) && (
                 <div className="glass-card p-5 rounded-2xl border border-white/10">
                   <ZendeskUserChecker
                     taskId={currentTaskId}
-                    initialEmail={task?.email}
+                    initialEmail={clientEmail || task?.email}
                     initialPhone={clientPhone}
                     initialName={task?.name}
                     isModalMode={true}
-                    onTaskUpdated={() => onActionComplete(true)}
+                    onTaskUpdated={() => {
+                      onActionComplete(true);
+                      fetchTaskDetails();
+                    }}
                     onSelectUser={(u, ticket) => {
+                      if (u.email) {
+                        setClientEmail(u.email);
+                        setCloneEmail(u.email);
+                      }
                       if (u.phone) setClientPhone(u.phone);
+                      if (u.external_id) setExternalId(u.external_id);
+                      if (u.name) setClientName(u.name);
                       const activeTicketId = ticket?.id ? String(ticket.id) : (u.recent_tickets?.[0]?.id ? String(u.recent_tickets[0].id) : "");
                       if (activeTicketId) {
                         setZendeskTicketId(activeTicketId);
                         setTicketNumber(activeTicketId);
+                        manualTicketRef.current = activeTicketId;
                       }
+                      setTask((prev: any) => prev ? {
+                        ...prev,
+                        email: u.email || prev.email,
+                        phone: u.phone || prev.phone,
+                        zendesk_ticket_id: activeTicketId || prev.zendesk_ticket_id
+                      } : prev);
                       if (onTaskUpdated) {
                         onTaskUpdated(currentTaskId, { 
                           email: u.email, 
@@ -1220,14 +1771,16 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                           zendesk_ticket_id: activeTicketId 
                         });
                       }
+                      // Actualizar detalles de la tarea para reflejar los datos inmediatamente
+                      fetchTaskDetails();
                     }}
                   />
                 </div>
               )}
 
-              {/* Tab 2: Donna Chat */}
-              {activeSubTab === "chat" && (
-                <div className="flex flex-col h-[520px] bg-white/5 border border-white/10 rounded-2xl">
+              {/* Tab 2: Donna Chat (in drawer mode when not expanded) */}
+              {activeSubTab === "chat" && !isExpanded && (
+                <div className="flex flex-col h-[520px] bg-white/5 border border-white/10 rounded-2xl transition-all">
                   {/* Messages Window */}
                   <div className="flex-1 overflow-y-auto p-4 space-y-4">
                     {chatMessages.map((msg, idx) => (
@@ -1255,8 +1808,36 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                     <div ref={chatBottomRef} />
                   </div>
 
+                  {/* Quick Action Suggestion Chips */}
+                  <div className="px-3 pt-2 pb-1 bg-white/[0.03] border-t border-white/10 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                    <button
+                      type="button"
+                      onClick={() => handleSendChat("¿Cuántos días tiene sin responder el cliente?")}
+                      disabled={chatLoading}
+                      className="px-2.5 py-1 bg-white/10 hover:bg-white/20 border border-white/15 rounded-lg text-[11px] font-mono text-white/90 whitespace-nowrap transition-colors cursor-pointer disabled:opacity-40"
+                    >
+                      ⏳ ¿Cuántos días sin responder?
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSendChat("Dame un resumen ejecutivo de este caso y qué falta por resolver.")}
+                      disabled={chatLoading}
+                      className="px-2.5 py-1 bg-white/10 hover:bg-white/20 border border-white/15 rounded-lg text-[11px] font-mono text-white/90 whitespace-nowrap transition-colors cursor-pointer disabled:opacity-40"
+                    >
+                      📋 Resumen ejecutivo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSendChat("¿Qué documentos faltan o qué pruebas se requieren?")}
+                      disabled={chatLoading}
+                      className="px-2.5 py-1 bg-white/10 hover:bg-white/20 border border-white/15 rounded-lg text-[11px] font-mono text-white/90 whitespace-nowrap transition-colors cursor-pointer disabled:opacity-40"
+                    >
+                      📄 ¿Qué documentos faltan?
+                    </button>
+                  </div>
+
                   {/* Input Box */}
-                  <div className="p-3 border-t border-white/10 bg-white/5 flex gap-2 rounded-b-2xl">
+                  <div className="p-3 bg-white/5 flex gap-2 rounded-b-2xl">
                     <input
                       type="text"
                       placeholder="Pregunta a Donna sobre las notas de este ticket..."
@@ -1277,7 +1858,7 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
               )}
 
               {/* Tab 3: Cloning */}
-              {activeSubTab === "cloning" && (
+              {(activeSubTab === "cloning" || (isExpanded && activeSubTab === "chat" && lastSubTab === "cloning")) && (
                 <div className="space-y-6">
                   <div className="glass-card p-5 space-y-4">
                     <div className="flex items-center gap-2 text-amber-200 font-semibold text-xs uppercase tracking-wider font-mono">
@@ -1294,7 +1875,8 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                         <select
                           value={cloneMethod}
                           onChange={(e) => setCloneMethod(e.target.value)}
-                          className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2.5 text-xs font-mono text-white focus:outline-none focus:border-white/30"
+                          disabled={cloningTask}
+                          className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2.5 text-xs font-mono text-white focus:outline-none focus:border-white/30 disabled:opacity-50"
                         >
                           <option value="CHECK" className="bg-slate-900">CHECK / CHEQUE</option>
                           <option value="WIRE TRANSFER" className="bg-slate-900">BANK WIRE TRANSFER / TRANSFERENCIA</option>
@@ -1307,7 +1889,8 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                         <select
                           value={cloneType}
                           onChange={(e) => setCloneType(e.target.value)}
-                          className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2.5 text-xs font-mono text-white focus:outline-none focus:border-white/30"
+                          disabled={cloningTask}
+                          className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2.5 text-xs font-mono text-white focus:outline-none focus:border-white/30 disabled:opacity-50"
                         >
                           <option value="FULL REFUND" className="bg-slate-900">FULL REFUND / REEMBOLSO TOTAL</option>
                           <option value="PARTIAL REFUND" className="bg-slate-900">PARTIAL REFUND / REEMBOLSO PARCIAL</option>
@@ -1315,12 +1898,252 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
                       </div>
                     </div>
 
+                    {/* Mandatory Refund Description Fields */}
+                    <div className="p-4 bg-white/[0.03] border border-white/10 rounded-2xl space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-[11px] font-mono font-bold text-white/90 uppercase tracking-wider flex items-center gap-2">
+                          <span>📋 {cloneMethod === "WIRE TRANSFER" ? "Formato exacto Wire Transfer:" : "Datos requeridos para la descripción:"}</span>
+                        </div>
+                        {cloneMethod !== "WIRE TRANSFER" && (
+                          <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-full text-[10px] font-mono font-bold">
+                            Status: Pending
+                          </span>
+                        )}
+                      </div>
+
+                      {cloneMethod === "WIRE TRANSFER" ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-mono text-white/60">Name:</label>
+                            <input
+                              type="text"
+                              value={cloneClient}
+                              onChange={(e) => setCloneClient(e.target.value)}
+                              disabled={cloningTask}
+                              placeholder="Nombre del cliente"
+                              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/40"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-mono text-white/60">Email:</label>
+                            <input
+                              type="email"
+                              value={cloneEmail}
+                              onChange={(e) => setCloneEmail(e.target.value)}
+                              disabled={cloningTask}
+                              placeholder="correo@ejemplo.com"
+                              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/40"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-mono text-white/60">Phone:</label>
+                            <input
+                              type="text"
+                              value={clonePhone}
+                              onChange={(e) => setClonePhone(e.target.value)}
+                              disabled={cloningTask}
+                              placeholder="+1 (xxx) xxx-xxxx"
+                              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/40"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-mono text-white/60">Amount:</label>
+                            <input
+                              type="text"
+                              value={cloneAmount}
+                              onChange={(e) => setCloneAmount(e.target.value)}
+                              disabled={cloningTask}
+                              placeholder="$ USD"
+                              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/40"
+                            />
+                          </div>
+
+                          <div className="space-y-1 sm:col-span-2">
+                            <label className="text-[10px] font-mono text-white/60">Customer Address:</label>
+                            <input
+                              type="text"
+                              value={cloneAddress}
+                              onChange={(e) => setCloneAddress(e.target.value)}
+                              disabled={cloningTask}
+                              placeholder="Dirección del cliente (Billing Address)"
+                              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/40"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-mono text-white/60">Bank:</label>
+                            <input
+                              type="text"
+                              value={cloneBank}
+                              onChange={(e) => setCloneBank(e.target.value)}
+                              disabled={cloningTask}
+                              placeholder="Nombre del banco"
+                              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/40"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-mono text-white/60">Swift :</label>
+                            <input
+                              type="text"
+                              value={cloneSwift}
+                              onChange={(e) => setCloneSwift(e.target.value)}
+                              disabled={cloningTask}
+                              placeholder="SWIFT / ABA code"
+                              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/40"
+                            />
+                          </div>
+
+                          <div className="space-y-1 sm:col-span-2">
+                            <label className="text-[10px] font-mono text-white/60">Bank Account:</label>
+                            <input
+                              type="text"
+                              value={cloneBankAccount}
+                              onChange={(e) => setCloneBankAccount(e.target.value)}
+                              disabled={cloningTask}
+                              placeholder="Número de cuenta bancaria"
+                              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/40"
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-mono text-white/60">Cliente:</label>
+                            <input
+                              type="text"
+                              value={cloneClient}
+                              onChange={(e) => setCloneClient(e.target.value)}
+                              disabled={cloningTask}
+                              placeholder="Nombre del cliente"
+                              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/40"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-mono text-white/60">Email:</label>
+                            <input
+                              type="email"
+                              value={cloneEmail}
+                              onChange={(e) => setCloneEmail(e.target.value)}
+                              disabled={cloningTask}
+                              placeholder="correo@ejemplo.com"
+                              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/40"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-mono text-white/60">Tel:</label>
+                            <input
+                              type="text"
+                              value={clonePhone}
+                              onChange={(e) => setClonePhone(e.target.value)}
+                              disabled={cloningTask}
+                              placeholder="+1 (xxx) xxx-xxxx"
+                              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/40"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-mono text-white/60">Monto:</label>
+                            <input
+                              type="text"
+                              value={cloneAmount}
+                              onChange={(e) => setCloneAmount(e.target.value)}
+                              disabled={cloningTask}
+                              placeholder="$ USD"
+                              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/40"
+                            />
+                          </div>
+
+                          <div className="space-y-1 sm:col-span-2">
+                            <label className="text-[10px] font-mono text-white/60">Dirección (Billing / Envío):</label>
+                            <input
+                              type="text"
+                              value={cloneAddress}
+                              onChange={(e) => setCloneAddress(e.target.value)}
+                              disabled={cloningTask}
+                              placeholder="Dirección completa del cliente"
+                              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-white/40"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Live Description Preview */}
+                      <div className="mt-2 p-3 bg-black/40 border border-white/10 rounded-xl space-y-1">
+                        <div className="text-[10px] font-mono text-white/40 uppercase">Vista previa de la descripción:</div>
+                        <div className="text-[11px] font-mono text-emerald-300/90 whitespace-pre-wrap leading-relaxed">
+{cloneMethod === "WIRE TRANSFER" 
+? `Name: ${cloneClient || "(vacío)"}
+Email: ${cloneEmail || "(vacío)"}
+Phone: ${clonePhone || "(vacío)"}
+Customer Address: ${cloneAddress || "(vacío)"}
+Amount: ${cloneAmount || "(vacío)"}
+Bank: ${cloneBank || "(vacío)"}
+Swift : ${cloneSwift || "(vacío)"}
+Bank Account: ${cloneBankAccount || "(vacío)"}`
+: `Cliente: ${cloneClient || "(vacío)"}
+Email: ${cloneEmail || "(vacío)"}
+Tel: ${clonePhone || "(vacío)"}
+Dirección: ${cloneAddress || "(vacío)"}
+Monto: ${cloneAmount || "(vacío)"}
+Método: ${cloneMethod}
+Status: Pending`}
+                        </div>
+                      </div>
+                    </div>
+
+                    {cloneResult && (
+                      <div className={`p-4 rounded-xl border text-xs space-y-2.5 animate-fade-in ${
+                        cloneResult.success 
+                          ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300" 
+                          : "bg-rose-500/10 border-rose-500/30 text-rose-300"
+                      }`}>
+                        <div className="flex items-center gap-2 font-bold">
+                          {cloneResult.success ? <Check className="w-4 h-4 text-emerald-400 shrink-0" /> : <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />}
+                          <span>{cloneResult.message}</span>
+                        </div>
+                        {cloneResult.taskName && (
+                          <div className="text-[11px] font-mono opacity-90 pl-6">
+                            Nuevo nombre: <span className="font-semibold text-white">{cloneResult.taskName}</span>
+                          </div>
+                        )}
+                        {cloneResult.taskUrl && (
+                          <div className="pt-1 pl-6">
+                            <a
+                              href={cloneResult.taskUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 rounded-lg text-[11px] font-semibold text-emerald-200 transition-colors"
+                            >
+                              <span>Abrir tarea creada en ClickUp</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     <button
                       onClick={handleCloneRefund}
-                      disabled={submittingAction}
-                      className="w-full py-3 bg-white text-slate-950 hover:bg-white/90 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-[0_4px_15px_rgba(255,255,255,0.15)]"
+                      disabled={cloningTask}
+                      className="w-full py-3 bg-white text-slate-950 hover:bg-white/90 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-[0_4px_15px_rgba(255,255,255,0.15)] disabled:opacity-50"
                     >
-                      <Plus className="w-4 h-4 text-slate-950" /> Duplicar y Agregar Plantillas
+                      {cloningTask ? (
+                        <>
+                          <Loader2 className="w-4 h-4 text-slate-950 animate-spin" />
+                          <span>Duplicando y asignando a Lorenzo...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="w-4 h-4 text-slate-950" />
+                          <span>Duplicar y Agregar Plantillas</span>
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -1328,6 +2151,188 @@ export default function TaskDetailModal({ taskId, onClose, onActionComplete, onT
             </>
           )}
         </div>
+
+        {/* Right Side: Panel separado a la derecha de la pantalla en Pantalla Completa para Donna AI: Resumen del Caso */}
+        {isExpanded && (
+          <div className={`shrink-0 border-t lg:border-t-0 lg:border-l border-white/15 bg-slate-900/95 backdrop-blur-2xl flex flex-col h-full shadow-2xl min-h-0 transition-all duration-300 ${
+            showRightPanel ? "w-full lg:w-[460px] xl:w-[520px] 2xl:w-[560px]" : "w-auto"
+          }`}>
+            {showRightPanel ? (
+              <>
+                {/* Window Header */}
+                <div className="p-4 bg-slate-950/90 border-b border-white/10 flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center shadow-inner">
+                      <Sparkles className="w-4 h-4 text-cyan-400 animate-pulse" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xs font-bold text-white tracking-wide">Donna AI: Resumen del Caso</h4>
+                        <span className="flex items-center gap-1 text-[9px] font-mono text-cyan-400 bg-cyan-500/10 border border-cyan-500/30 px-1.5 py-0.5 rounded-full">
+                          <Sparkles className="w-2.5 h-2.5" />
+                          IA
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-white/50 font-mono">Panel lateral dedicado • #{taskId}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    {task?.summary && (
+                      <button
+                        type="button"
+                        onClick={handleCopySummary}
+                        className="p-1.5 px-2.5 rounded-lg bg-white/5 hover:bg-white/15 text-white/70 hover:text-white border border-white/10 text-xs font-mono flex items-center gap-1.5 transition-colors cursor-pointer"
+                        title="Copiar resumen del caso al portapapeles"
+                      >
+                        {copiedSummary ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span className="text-[10px]">{copiedSummary ? "Copiado" : "Copiar"}</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowRightPanel(false)}
+                      className="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-white/50 hover:text-white border border-white/10 transition-colors cursor-pointer"
+                      title="Ocultar panel lateral"
+                    >
+                      <Minimize2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Body Content: Resumen del Caso + Consultas / Chat */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
+                  {/* Executive Case Summary Card */}
+                  <div className="bg-slate-950/70 border border-cyan-500/30 p-4 rounded-2xl space-y-2.5 shadow-lg relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/5 rounded-full blur-2xl pointer-events-none" />
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-1.5 text-cyan-300 font-mono text-[11px] font-bold uppercase tracking-wider">
+                        <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                        Resumen Ejecutivo del Caso
+                      </span>
+                      <span className="text-[10px] font-mono text-white/40">
+                        {task?.summary ? `${task.summary.length} car.` : "Pendiente"}
+                      </span>
+                    </div>
+
+                    {loading ? (
+                      <div className="flex items-center gap-2 py-4 justify-center text-xs text-white/50 font-mono">
+                        <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
+                        <span>Generando análisis del caso con Donna...</span>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-white/90 leading-relaxed font-sans whitespace-pre-wrap selection:bg-cyan-500/30 select-text">
+                        {task?.summary || "No hay resumen generado aún para este caso."}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Interactive Donna IA Consultation Section */}
+                  <div className="space-y-3 pt-2 border-t border-white/10">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-white/80 font-mono uppercase tracking-wider flex items-center gap-1.5">
+                        <Bot className="w-3.5 h-3.5 text-cyan-400" />
+                        Consultar con Donna IA
+                      </span>
+                      <span className="text-[9px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">
+                        En vivo
+                      </span>
+                    </div>
+
+                    {/* Messages Container */}
+                    <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
+                      {chatMessages.map((msg, idx) => (
+                        <div key={idx} className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
+                          <div className={`max-w-[88%] rounded-2xl p-3 text-xs leading-relaxed ${
+                            msg.sender === "user" 
+                              ? "bg-white text-slate-950 rounded-tr-none font-bold shadow-md" 
+                              : "bg-white/10 border border-white/15 text-white/90 rounded-tl-none font-sans whitespace-pre-wrap"
+                          }`}>
+                            {msg.text}
+                            <span className={`block text-[8px] font-mono mt-1 text-right ${msg.sender === "user" ? "text-slate-500" : "text-white/40"}`}>
+                              {msg.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                      {chatLoading && (
+                        <div className="flex justify-start">
+                          <div className="bg-white/10 border border-white/15 rounded-2xl rounded-tl-none p-3 flex items-center gap-2">
+                            <Loader2 className="w-3.5 h-3.5 text-white/60 animate-spin" />
+                            <span className="text-xs text-white/50 font-mono">Donna está analizando el caso...</span>
+                          </div>
+                        </div>
+                      )}
+                      <div ref={chatBottomRef} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick Action Suggestion Chips */}
+                <div className="px-3 pt-2 pb-1.5 bg-slate-950/40 border-t border-white/10 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleSendChat("¿Cuántos días tiene sin responder el cliente?")}
+                    disabled={chatLoading}
+                    className="px-2.5 py-1 bg-white/10 hover:bg-white/20 border border-white/15 rounded-lg text-[11px] font-mono text-white/90 whitespace-nowrap transition-colors cursor-pointer disabled:opacity-40"
+                  >
+                    ⏳ ¿Cuántos días sin responder?
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSendChat("Dame un resumen ejecutivo de este caso y qué falta por resolver.")}
+                    disabled={chatLoading}
+                    className="px-2.5 py-1 bg-white/10 hover:bg-white/20 border border-white/15 rounded-lg text-[11px] font-mono text-white/90 whitespace-nowrap transition-colors cursor-pointer disabled:opacity-40"
+                  >
+                    📋 Resumen ejecutivo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSendChat("¿Qué documentos faltan o qué pruebas se requieren?")}
+                    disabled={chatLoading}
+                    className="px-2.5 py-1 bg-white/10 hover:bg-white/20 border border-white/15 rounded-lg text-[11px] font-mono text-white/90 whitespace-nowrap transition-colors cursor-pointer disabled:opacity-40"
+                  >
+                    📄 ¿Qué documentos faltan?
+                  </button>
+                </div>
+
+                {/* Input Box */}
+                <div className="p-3 bg-slate-950/90 border-t border-white/10 flex gap-2 shrink-0">
+                  <input
+                    type="text"
+                    placeholder="Pregunta a Donna sobre las notas de este ticket..."
+                    value={chatQuery}
+                    onChange={(e) => setChatQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSendChat()}
+                    className="flex-1 bg-white/5 border border-white/15 rounded-xl px-3.5 py-2 text-xs text-white placeholder-white/30 focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all"
+                  />
+                  <button
+                    onClick={handleSendChat}
+                    disabled={chatLoading || !chatQuery.trim()}
+                    className="p-2.5 rounded-xl bg-white text-slate-950 hover:bg-white/90 flex items-center justify-center transition-all cursor-pointer disabled:opacity-40 shadow-md"
+                  >
+                    <Send className="w-4 h-4 text-slate-950" />
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="p-3 flex flex-col items-center justify-center h-full bg-slate-950/90">
+                <button
+                  type="button"
+                  onClick={() => setShowRightPanel(true)}
+                  className="p-3 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 flex flex-col items-center gap-2 transition-all cursor-pointer shadow-lg"
+                  title="Mostrar Donna AI: Resumen del Caso"
+                >
+                  <Sparkles className="w-4 h-4 animate-pulse" />
+                  <span className="text-[10px] font-mono font-bold [writing-mode:vertical-lr] rotate-180">
+                    Donna AI: Resumen
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
         {showScheduleModal && (
           <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-6 z-50 animate-fade-in">

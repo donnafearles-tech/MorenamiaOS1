@@ -36,6 +36,37 @@ export interface DisputeResult {
   leyenda?: string | null;
 }
 
+export interface InvoiceCheckTaskInfo {
+  id: string;
+  name: string;
+  url: string;
+  status: string;
+  statusColor?: string;
+  listName: string;
+  listId?: string;
+  assignees?: string[];
+  dueDate?: string | null;
+  dateUpdated?: string | null;
+  reason?: string | null;
+}
+
+export interface InvoiceCheckDetail {
+  invoice: string;
+  exists: boolean;
+  task: InvoiceCheckTaskInfo | null;
+}
+
+export interface InvoiceCheckResponse {
+  totalInput: number;
+  foundCount: number;
+  notFoundCount: number;
+  foundInvoices: string[];
+  notFoundInvoices: string[];
+  details: InvoiceCheckDetail[];
+  scopeUsed: string;
+  totalTasksChecked: number;
+}
+
 export interface ChatMessage {
   sender: "user" | "donna";
   text: string;

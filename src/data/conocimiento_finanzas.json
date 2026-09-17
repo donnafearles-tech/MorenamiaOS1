@@ -42,8 +42,9 @@
           }
         },
         "task_creation_for_refund": {
-          "duplicate_task": "Duplicate the customer service task and rename as 'INVOICE + CHECK / WIRE TRANSFER + FULL/PARTIAL REFUND'. Move to the 'REFUND' section, assign to Lorenzo.",
-          "fields_to_verify": ["Name", "Email", "Phone", "Address", "Amount ($USD)"],
+          "duplicate_task": "Duplicate the customer service task and rename as 'INVOICE + CHECK / WIRE TRANSFER + FULL/PARTIAL REFUND'. Move to the 'REFUND' section (List #223500803), assign to Lorenzo.",
+          "mandatory_task_description_template": "Para Wire Transfers, el formato exacto y único es:\n\nName: [Nombre del cliente]\nEmail: [Correo electrónico]\nPhone: [Teléfono]\nCustomer Address: [Dirección de facturación del cliente]\nAmount: [Monto en $ USD]\nBank: [Nombre del banco]\nSwift : [Código SWIFT]\nBank Account: [Número de cuenta]\n(Quitar toda otra línea de texto)",
+          "fields_to_verify": ["Name", "Email", "Phone", "Customer Address", "Amount", "Bank", "Swift ", "Bank Account"],
           "final_check": "Double‑check all data: amount, name, account, address, and completeness."
         },
         "docusign": {
@@ -73,6 +74,27 @@
           "To proceed with a refund, the customer must cancel the dispute and provide a closure letter from the bank."
         ],
         "template_example": "Please do not initiate a dispute (chargeback) with your bank. A dispute freezes the funds and delays your refund. If you have already contacted your bank, please let us know so we can guide you."
+      }
+    },
+    {
+      "id": "pandr_resolution",
+      "name": "P+R (Product + Refund) Resolution Rule",
+      "content": {
+        "rule": "When a comment or agreement specifies that a product will be delivered/sent AND ALSO a refund will be issued, the resolution MUST BE strictly set to 'P+R' (Product + Refund).",
+        "uuid": "cdc84079-b6a3-4665-9161-97d8d7bac5eb",
+        "description": "Applies whenever an agreement combines product replacement/gift with full or partial monetary refund."
+      }
+    },
+    {
+      "id": "gbk_tax_refund",
+      "name": "Give Back (GBK) Tax Refund",
+      "content": {
+        "definition": "Tax refund program for international customers/tourists.",
+        "contact_details": {
+          "phone": "+1 (202) 838-4850",
+          "email": "care@givebackmytaxrefund.com"
+        },
+        "procedure": "If the customer has inquiries regarding their tax refund status, direct them to contact Give Back via Phone: +1 (202) 838-4850 or Email: care@givebackmytaxrefund.com. If their Give Back benefit was rejected, offer customer service compensation with skincare/serums from the SPARE MMG catalog."
       }
     }
   ]

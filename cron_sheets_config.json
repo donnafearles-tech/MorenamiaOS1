@@ -1,0 +1,25 @@
+{
+  "enabled": true,
+  "intervalHours": 3,
+  "cronExpression": "0 */3 * * *",
+  "spreadsheetId": "1RvYVVhdfU37FeCkgBdhfQ7xdBLDtET5XupBY_ivilDI",
+  "sheetName": "13 de agosto",
+  "includeClosed": false,
+  "onlyMyTasks": true,
+  "assigneeId": "101113624",
+  "lastRunTime": "2026-09-03T13:45:45.036Z",
+  "lastRunStatus": "success",
+  "lastRunDetails": {
+    "success": true,
+    "spreadsheetId": "1RvYVVhdfU37FeCkgBdhfQ7xdBLDtET5XupBY_ivilDI",
+    "sheetName": "13 de agosto",
+    "tasksCount": 15,
+    "totalListTasks": 15,
+    "targetAssigneeId": "101113624",
+    "pagesCount": 1,
+    "summariesCount": 0,
+    "rowsCount": 16,
+    "latencyMs": 19395,
+    "timestamp": "2026-09-03T13:46:04.432Z"
+  }
+}

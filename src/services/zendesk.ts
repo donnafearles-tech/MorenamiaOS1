@@ -79,3 +79,48 @@ export async function checkZendeskUser(params: {
     };
   }
 }
+
+export async function updateZendeskUser(params: {
+  user_id?: number | string;
+  task_id?: string;
+  phone?: string;
+  external_id?: string;
+  email?: string;
+  name?: string;
+  ticket_id?: string;
+  notes?: string;
+}): Promise<{
+  success: boolean;
+  user_updated?: boolean;
+  ticket_updated?: boolean;
+  user_id?: any;
+  message: string;
+  details?: string;
+  error?: string;
+}> {
+  try {
+    const res = await fetch("/api/zendesk/update-user", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params)
+    });
+    
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      return {
+        success: false,
+        message: errData.error || `Error HTTP ${res.status} al actualizar en Zendesk`,
+        error: errData.error
+      };
+    }
+
+    return await res.json();
+  } catch (err: any) {
+    return {
+      success: false,
+      message: err.message || "Error de conexión al actualizar en Zendesk",
+      error: err.message
+    };
+  }
+}
+

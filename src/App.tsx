@@ -9,6 +9,7 @@ import RefundsList from "./components/RefundsList";
 import MetricsPanel from "./components/MetricsPanel";
 import TaskDetailModal from "./components/TaskDetailModal";
 import ZendeskUserChecker from "./components/ZendeskUserChecker";
+import GoogleSheetsExporter from "./components/GoogleSheetsExporter";
 import { Task } from "./types";
 import { Loader2 } from "lucide-react";
 
@@ -92,6 +93,8 @@ export default function App() {
         return <RefundsList />;
       case "zendesk-check":
         return <ZendeskUserChecker tasksList={tasks} onTaskUpdated={fetchTasks} />;
+      case "sheets-export":
+        return <GoogleSheetsExporter />;
       case "metrics":
         return <MetricsPanel />;
       default:

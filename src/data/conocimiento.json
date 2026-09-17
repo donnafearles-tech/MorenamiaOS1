@@ -15,8 +15,12 @@
       "instruccion": "Verificar stock antes de prometer un reemplazo. Si un dispositivo como el 'Marvelous Gold' o 'Jelessi' está fuera de stock, ofrecer la alternativa más cercana (ej. 'Marvelous Signature Pro' o 'Gorilla Device'). Nunca ofrecer un dispositivo sin antes confirmar la disponibilidad."
     },
     {
-      "tema": "Compensaciones por Give Back (GBK) Rechazado",
-      "instruccion": "Si al cliente se le rechazó el beneficio del GBK, ofrecer un regalo de compensación. Basarse en el 'spare' del cliente para elegir productos de la lista SPARE MMG. Siempre ofrecer cremas o sueros, NO dispositivos, a menos que sea una situación extremadamente grave."
+      "tema": "Resolución Oficial P+R (Producto + Reembolso)",
+      "instruccion": "REGLA ESTRICTA: Cuando en el comentario o en el acuerdo con el cliente se agregue que se va a entregar/enviar un producto y aparte/además un reembolso (reembolso total o parcial combinado con reposición o regalo de producto), la resolución oficial en ClickUp DEBE SER estrictamente 'P+R' (UUID: cdc84079-b6a3-4665-9161-97d8d7bac5eb). No debe clasificarse como solo REFUND ni como solo GIFT."
+    },
+    {
+      "tema": "Compensaciones y Contacto por Give Back (GBK) / Tax Refund",
+      "instruccion": "Si al cliente se le rechazó el beneficio del GBK o requiere contacto directo con Give Back, proporcionarle los canales oficiales: Teléfono: +1 (202) 838-4850, Correo: care@givebackmytaxrefund.com. Si se le rechazó el beneficio del GBK, ofrecer un regalo de compensación. Basarse en el 'spare' del cliente para elegir productos de la lista SPARE MMG. Siempre ofrecer cremas o sueros, NO dispositivos, a menos que sea una situación extremadamente grave."
     },
     {
       "tema": "Seguimiento Diario en ClickUp",
@@ -46,7 +50,8 @@
   "refund_process": {
     "task_creation": {
       "pre_verification": "Revisar información de DocuSign: que el ID adjunto sea del tarjetahabiente. Para cheque: verificar dirección completa y válida. Para Wire Transfer: la dirección debe ser billing address del cliente (no la del banco), verificar que el banco pueda recibir WT internacional sin intermediario. Si se provee banco intermediario, incluir toda la info. Verificar SWIFT CODE en sitio oficial del banco.",
-      "duplicate_task": "Duplicar la tarea y renombrar como 'INVOICE + CHECK / WIRE TRANSFER + FULL/PARTIAL REFUND'. Abrir la tarea duplicada en la sección 'REFUND'. Agregar fecha de vencimiento y asignar a Lorenzo.",
+      "duplicate_task": "Duplicar la tarea y renombrar como 'INVOICE + CHECK / WIRE TRANSFER + FULL/PARTIAL REFUND'. Abrir la tarea duplicada en la sección 'REFUND' (Lista #223500803). Agregar fecha de vencimiento y asignar a Lorenzo.",
+      "mandatory_description_format": "Al duplicar una tarea a refund, incluir el formato exacto en la descripción. Para Wire Transfers el formato obligatorio y único es:\n\nName: [Nombre del cliente]\nEmail: [Correo electrónico]\nPhone: [Teléfono]\nCustomer Address: [Billing Address del cliente]\nAmount: [Monto en $ USD]\nBank: [Nombre del banco]\nSwift : [Código SWIFT]\nBank Account: [Número de cuenta]\n(Quitar toda otra línea de texto para Wire Transfers)",
       "fields_check": {
         "name": "Nombre del cliente",
         "email": "Correo",
@@ -55,14 +60,14 @@
         "amount": "$ USD"
       },
       "fields_wire": {
-        "customer_name": "Nombre del cliente",
-        "bank_name": "Nombre del banco",
-        "bank_account": "Número de cuenta",
-        "address": "Dirección (billing address)",
-        "ph": "Teléfono",
-        "swift_code": "SWIFT code",
-        "amount": "$ USD",
-        "intermediary_bank_info": "Incluir si se proporciona"
+        "name": "Name: Nombre del cliente",
+        "email": "Email: Correo",
+        "phone": "Phone: Teléfono",
+        "customer_address": "Customer Address: Billing address del cliente",
+        "amount": "Amount: Monto en $ USD",
+        "bank": "Bank: Nombre del banco",
+        "swift": "Swift : Código SWIFT",
+        "bank_account": "Bank Account: Número de cuenta"
       },
       "final_check": "Verificar nuevamente toda la información: monto, nombre, cuenta, dirección, que todos los campos estén completos."
     },
@@ -148,7 +153,11 @@
         "envio": "Overnight. Adjuntar link de FedEx en comentario de ClickUp."
       },
       "GBK_TAXES": {
-        "procedimiento": "Verificar si aplicó el beneficio. Si fue rechazado, explicar causa (documentación faltante, tarjeta no válida, etc.).",
+        "procedimiento": "Verificar si aplicó el beneficio. Si fue rechazado, explicar causa (documentación faltante, tarjeta no válida, etc.). Si el cliente necesita comunicarse directamente con Give Back, proporcionarle los datos de contacto oficiales.",
+        "contacto_oficial_gbk": {
+          "telefono": "+1 (202) 838-4850",
+          "email": "care@givebackmytaxrefund.com"
+        },
         "compensacion": "Ofrecer productos del catálogo SPARE MMG basado en el monto del spare. Si la situación no es grave, NO ofrecer dispositivos, solo cremas/sueros.",
         "razon_compensacion": "Usar 'Instructions' u otro motivo real, no solo 'Gift'."
       },

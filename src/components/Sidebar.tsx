@@ -11,7 +11,8 @@ import {
   ClipboardList,
   ChevronLeft,
   ChevronRight,
-  UserCheck
+  UserCheck,
+  FileSpreadsheet
 } from "lucide-react";
 
 interface SidebarProps {
@@ -54,6 +55,7 @@ export default function Sidebar({ activeTab, setActiveTab, userEmail, tasksCount
     { id: "refund-list", label: "Lista de Reembolsos", icon: ClipboardList, color: "text-rose-400" },
     { id: "disputes-sync", label: "Sincronizar Disputas", icon: RefreshCw, color: "text-emerald-400" },
     { id: "zendesk-check", label: "Verificar Zendesk", icon: UserCheck, color: "text-emerald-400" },
+    { id: "sheets-export", label: "Exportar Google Sheets", icon: FileSpreadsheet, color: "text-emerald-300" },
     { id: "metrics", label: "Métricas y Diagnóstico", icon: BarChart2, color: "text-blue-400" },
   ];
 

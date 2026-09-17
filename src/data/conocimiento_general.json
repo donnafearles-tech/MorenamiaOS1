@@ -83,6 +83,7 @@
           "For refunds, verify no active dispute first.",
           "If product is defective or missing, replacement is always authorized (under $500 does not need escalation).",
           "For GBK offers, prefer products over devices.",
+          "When a case includes delivering a product and also a refund, the resolution MUST BE strictly P+R (Product + Refund).",
           "For Shalem, use exact format for payment link requests."
         ]
       }

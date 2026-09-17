@@ -18,15 +18,19 @@ import {
   RefreshCw,
   Plus,
   Zap,
-  ArrowRight
+  ArrowRight,
+  Hash,
+  Edit2,
+  Save
 } from "lucide-react";
-import { checkZendeskUser, CheckZendeskUserResponse, ZendeskUserResult, ZendeskTicketSummary } from "../services/zendesk";
+import { checkZendeskUser, updateZendeskUser, CheckZendeskUserResponse, ZendeskUserResult, ZendeskTicketSummary } from "../services/zendesk";
 
 interface ZendeskUserCheckerProps {
   initialEmail?: string;
   initialPhone?: string;
   initialName?: string;
   initialQuery?: string;
+  initialExternalId?: string;
   isModalMode?: boolean;
   taskId?: string;
   tasksList?: any[];
@@ -40,6 +44,7 @@ export default function ZendeskUserChecker({
   initialPhone = "",
   initialName = "",
   initialQuery = "",
+  initialExternalId = "",
   isModalMode = false,
   taskId,
   tasksList = [],
@@ -47,7 +52,8 @@ export default function ZendeskUserChecker({
   onClose,
   onSelectUser
 }: ZendeskUserCheckerProps) {
-  const [searchType, setSearchType] = useState<"email" | "phone" | "name" | "query">(() => {
+  const [searchType, setSearchType] = useState<"email" | "phone" | "name" | "external_id" | "query">(() => {
+    if (initialExternalId) return "external_id";
     if (initialEmail) return "email";
     if (initialPhone) return "phone";
     if (initialName) return "name";
@@ -57,11 +63,18 @@ export default function ZendeskUserChecker({
   const [emailInput, setEmailInput] = useState(initialEmail);
   const [phoneInput, setPhoneInput] = useState(initialPhone);
   const [nameInput, setNameInput] = useState(initialName);
+  const [extIdInput, setExtIdInput] = useState(initialExternalId);
   const [queryInput, setQueryInput] = useState(initialQuery);
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<CheckZendeskUserResponse | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // Direct Zendesk user editing
+  const [editingUserId, setEditingUserId] = useState<number | null>(null);
+  const [editExtIdVal, setEditExtIdVal] = useState("");
+  const [editPhoneVal, setEditPhoneVal] = useState("");
+  const [savingUserZd, setSavingUserZd] = useState(false);
 
   // Active target task state for automatic association
   const [selectedTaskId, setSelectedTaskId] = useState<string>(taskId || "");
@@ -82,11 +95,13 @@ export default function ZendeskUserChecker({
     setResult(null);
     setSyncFeedback(null);
 
-    const payload: { email?: string; phone?: string; name?: string; query?: string } = {};
-    if (searchType === "email" && emailInput.trim()) payload.email = emailInput.trim();
+    const payload: { email?: string; phone?: string; name?: string; external_id?: string; query?: string } = {};
+    if (searchType === "external_id" && extIdInput.trim()) payload.external_id = extIdInput.trim();
+    else if (searchType === "email" && emailInput.trim()) payload.email = emailInput.trim();
     else if (searchType === "phone" && phoneInput.trim()) payload.phone = phoneInput.trim();
     else if (searchType === "name" && nameInput.trim()) payload.name = nameInput.trim();
     else if (queryInput.trim()) payload.query = queryInput.trim();
+    else if (extIdInput.trim()) payload.external_id = extIdInput.trim();
     else if (emailInput.trim()) payload.email = emailInput.trim();
     else if (phoneInput.trim()) payload.phone = phoneInput.trim();
     else if (nameInput.trim()) payload.name = nameInput.trim();
@@ -102,7 +117,7 @@ export default function ZendeskUserChecker({
   };
 
   useEffect(() => {
-    if (initialEmail || initialPhone || initialName || initialQuery) {
+    if (initialExternalId || initialEmail || initialPhone || initialName || initialQuery) {
       handleSearch();
     }
   }, []);
@@ -111,6 +126,45 @@ export default function ZendeskUserChecker({
     navigator.clipboard.writeText(text);
     setCopiedField(label);
     setTimeout(() => setCopiedField(null), 2000);
+  };
+
+  const handleSaveZendeskUserProfile = async (user: ZendeskUserResult) => {
+    setSavingUserZd(true);
+    try {
+      const res = await updateZendeskUser({
+        user_id: user.id,
+        task_id: selectedTaskId || undefined,
+        external_id: editExtIdVal.trim(),
+        phone: editPhoneVal.trim(),
+        email: user.email || undefined,
+        name: user.name || undefined
+      });
+
+      if (res.success) {
+        setSyncFeedback({
+          id: String(user.id),
+          message: `✅ Perfil de Zendesk #${user.id} actualizado con éxito (External ID: ${editExtIdVal.trim() || 'N/A'}).`,
+          type: "success"
+        });
+        setEditingUserId(null);
+        handleSearch(); // Refresh user data
+        if (onTaskUpdated) onTaskUpdated();
+      } else {
+        setSyncFeedback({
+          id: String(user.id),
+          message: `❌ Error al actualizar en Zendesk: ${res.message || res.error}`,
+          type: "error"
+        });
+      }
+    } catch (err: any) {
+      setSyncFeedback({
+        id: String(user.id),
+        message: `❌ Error: ${err.message}`,
+        type: "error"
+      });
+    } finally {
+      setSavingUserZd(false);
+    }
   };
 
   // Helper to get active Zendesk ticket for a user
@@ -151,22 +205,26 @@ export default function ZendeskUserChecker({
           task_id: targetTaskId,
           email: user.email || undefined,
           phone: user.phone || undefined,
+          external_id: user.external_id || undefined,
+          name: user.name || undefined,
           zendesk_ticket_id: targetTicketId || undefined
         })
       });
 
+      const data = await res.json().catch(() => ({}));
+
       if (res.ok) {
+        const zdExtra = data.zendesk_synced ? " y sincronizado con Zendesk (External ID)" : "";
         setSyncFeedback({
           id: String(user.id),
-          message: `✅ ¡Datos actualizados automáticamente! Correo (${user.email || 'N/A'}) y Ticket Zendesk #${targetTicketId || 'sin ticket'} asociados a la Tarea #${targetTaskId}.`,
+          message: `✅ ¡Datos actualizados exitosamente! Correo (${user.email || 'N/A'}), External ID (${user.external_id || 'N/A'}) y Ticket Zendesk #${targetTicketId || 'sin ticket'} asociados a la Tarea #${targetTaskId}${zdExtra}.`,
           type: "success"
         });
         if (onTaskUpdated) onTaskUpdated();
       } else {
-        const err = await res.json().catch(() => ({}));
         setSyncFeedback({
           id: String(user.id),
-          message: `❌ Error al actualizar la tarea #${targetTaskId}: ${err.error || 'Respuesta inválida'}`,
+          message: `❌ Error al actualizar la tarea #${targetTaskId}: ${data.error || 'Respuesta inválida'}`,
           type: "error"
         });
       }
@@ -241,8 +299,9 @@ export default function ZendeskUserChecker({
       {/* Search Form Card */}
       <div className="glass-card p-5 rounded-2xl border border-white/10 bg-white/5 space-y-4">
         {/* Search Type Tabs */}
-        <div className="grid grid-cols-4 gap-1.5 p-1 bg-black/40 rounded-xl border border-white/10 text-xs font-semibold">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 p-1 bg-black/40 rounded-xl border border-white/10 text-xs font-semibold">
           {[
+            { type: "external_id", label: "Factura / Ext ID", icon: Hash },
             { type: "email", label: "Correo", icon: Mail },
             { type: "phone", label: "Teléfono", icon: Phone },
             { type: "name", label: "Nombre", icon: User },
@@ -262,7 +321,7 @@ export default function ZendeskUserChecker({
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">{tab.label}</span>
+                <span className="truncate">{tab.label}</span>
               </button>
             );
           })}
@@ -270,6 +329,19 @@ export default function ZendeskUserChecker({
 
         {/* Input Form */}
         <form onSubmit={handleSearch} className="space-y-3">
+          {searchType === "external_id" && (
+            <div className="relative">
+              <Hash className="w-4 h-4 absolute left-3.5 top-3 text-cyan-400 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Ingresa número de factura o External ID (ej. 123456)..."
+                value={extIdInput}
+                onChange={(e) => setExtIdInput(e.target.value)}
+                className="w-full bg-white/5 border border-cyan-500/30 rounded-xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-white/30 focus:outline-none focus:border-cyan-400 font-mono"
+              />
+            </div>
+          )}
+
           {searchType === "email" && (
             <div className="relative">
               <Mail className="w-4 h-4 absolute left-3.5 top-3 text-white/40 pointer-events-none" />
@@ -470,7 +542,75 @@ export default function ZendeskUserChecker({
                     )}
 
                     {/* Grid details */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                      {/* External ID / Invoice # */}
+                      <div className="p-3 bg-cyan-950/20 border border-cyan-500/30 rounded-xl space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-cyan-300 uppercase block">External ID / Factura</span>
+                          {editingUserId !== u.id && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingUserId(u.id);
+                                setEditExtIdVal(u.external_id || "");
+                                setEditPhoneVal(u.phone || "");
+                              }}
+                              className="text-[10px] text-cyan-400 hover:text-cyan-200 flex items-center gap-1 font-bold cursor-pointer"
+                              title="Editar en Zendesk"
+                            >
+                              <Edit2 className="w-3 h-3" /> Editar
+                            </button>
+                          )}
+                        </div>
+
+                        {editingUserId === u.id ? (
+                          <div className="space-y-2 pt-1">
+                            <input
+                              type="text"
+                              placeholder="Ej. 123456"
+                              value={editExtIdVal}
+                              onChange={(e) => setEditExtIdVal(e.target.value)}
+                              className="w-full bg-black/50 border border-cyan-400 rounded-lg px-2 py-1 text-xs font-mono text-white focus:outline-none"
+                              autoFocus
+                            />
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                disabled={savingUserZd}
+                                onClick={() => handleSaveZendeskUserProfile(u)}
+                                className="flex-1 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-lg text-[10px] flex items-center justify-center gap-1 cursor-pointer"
+                              >
+                                {savingUserZd ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                                Guardar en Zendesk
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingUserId(null)}
+                                className="px-2 py-1 bg-white/10 text-white/70 hover:text-white rounded-lg text-[10px] cursor-pointer"
+                              >
+                                Cancelar
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-cyan-200 font-bold truncate mr-2">
+                              {u.external_id || "No asignado"}
+                            </span>
+                            {u.external_id && (
+                              <button
+                                type="button"
+                                onClick={() => copyToClipboard(u.external_id || "", `ext-${u.id}`)}
+                                className="text-cyan-400/60 hover:text-cyan-300 p-1 cursor-pointer"
+                                title="Copiar External ID"
+                              >
+                                {copiedField === `ext-${u.id}` ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
                       <div className="p-3 bg-white/5 border border-white/10 rounded-xl space-y-1">
                         <span className="text-[10px] font-bold text-white/40 uppercase block">Correo Electrónico</span>
                         <div className="flex items-center justify-between">

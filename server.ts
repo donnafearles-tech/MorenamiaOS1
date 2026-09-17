@@ -8,16 +8,26 @@
 	const require = createRequire(import.meta.url);
 	const archiver = require("archiver");
 	import { getStateByPhone, getTimezoneByPhone } from "./src/data/areaCodes";
+	import { getVertexClient, getGeminiClient } from "./src/services/geminiClient.js";
+	import { google } from "googleapis";
+	import cron from "node-cron";
+
+	// Preserve original valid service account credentials from container environment
+	const INITIAL_CONTAINER_SA_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+
+	dotenv.config({ override: true });
+
+	// Restore valid container Service Account JSON if dotenv corrupted or truncated it
+	if (INITIAL_CONTAINER_SA_JSON) {
+	  try {
+	    JSON.parse(INITIAL_CONTAINER_SA_JSON);
+	    process.env.GOOGLE_SERVICE_ACCOUNT_JSON = INITIAL_CONTAINER_SA_JSON;
+	  } catch {}
+	}
 
 	// Ensure dummy placeholder values or revoked keys never override real working keys
 	const PLACEHOLDERS = ["MY_GROQ_API_KEY", "MY_APP_URL"];
 	const REVOKED_KEYS = ["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"];
-
-	// Force active working key if current key is missing or revoked
-	const WORKING_GROQ_KEY = "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";
-	if (!process.env.GROQ_API_KEY || REVOKED_KEYS.some(rk => process.env.GROQ_API_KEY?.includes(rk))) {
-	  process.env.GROQ_API_KEY = WORKING_GROQ_KEY;
-	}
 
 	for (const key of Object.keys(process.env)) {
 	  let val = process.env[key];
@@ -29,6 +39,12 @@
 		  delete process.env[key];
 		}
 	  }
+	}
+
+	// Sanitize GOOGLE_APPLICATION_CREDENTIALS if it points to an invalid/non-existent path (e.g. Windows C:\...)
+	if (process.env.GOOGLE_APPLICATION_CREDENTIALS && !fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS)) {
+	  console.warn(`[Init] Descartando GOOGLE_APPLICATION_CREDENTIALS inválido: ${process.env.GOOGLE_APPLICATION_CREDENTIALS}`);
+	  delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 	}
 
 	// Fallback to .env.example for any missing variables
@@ -218,30 +234,48 @@
 			  merged[k] = String(v);
 			}
 		  }
-		  // Sanitize revoked/invalid keys
+		  // Sanitize revoked/invalid keys, invalid file paths, and corrupted JSON
 		  for (const [k, v] of Object.entries(merged)) {
 		    const valStr = String(v || "");
 		    if (REVOKED_KEYS.some(rk => valStr.includes(rk))) {
-		      if (k === "GROQ_API_KEY") {
-		        merged[k] = WORKING_GROQ_KEY;
-		      } else {
-		        delete merged[k];
+		      delete merged[k];
+		    }
+		    if (k === "GOOGLE_APPLICATION_CREDENTIALS" && !fs.existsSync(valStr)) {
+		      console.warn(`[Supabase Sync] Descartando GOOGLE_APPLICATION_CREDENTIALS remoto no existente: ${valStr}`);
+		      delete merged[k];
+		    }
+		    if (k === "GOOGLE_SERVICE_ACCOUNT_JSON") {
+		      try {
+		        JSON.parse(valStr);
+		      } catch {
+		        console.warn(`[Supabase Sync] Descartando GOOGLE_SERVICE_ACCOUNT_JSON remoto corrupto o truncado.`);
+		        if (INITIAL_CONTAINER_SA_JSON) {
+		          merged[k] = INITIAL_CONTAINER_SA_JSON;
+		        } else {
+		          delete merged[k];
+		        }
 		      }
 		    }
 		  }
-		  if (!merged.GROQ_API_KEY || REVOKED_KEYS.some(rk => merged.GROQ_API_KEY.includes(rk))) {
-		    merged.GROQ_API_KEY = WORKING_GROQ_KEY;
-		  }
 
-		  const envLines = Object.keys(merged).map(k => `${k}="${merged[k]}"`);
+		  // Write clean env without breaking multiline variables
+		  const envLines: string[] = [];
+		  for (const [k, v] of Object.entries(merged)) {
+		    if (k === "GOOGLE_SERVICE_ACCOUNT_JSON") continue; // Keep SA JSON in container environment
+		    const cleanV = String(v).replace(/\r?\n/g, "");
+		    envLines.push(`${k}="${cleanV}"`);
+		  }
 		  fs.writeFileSync(envPath, envLines.join("\n"), "utf-8");
 		  
 		  dotenv.config({ override: true });
+		  if (INITIAL_CONTAINER_SA_JSON) {
+		    process.env.GOOGLE_SERVICE_ACCOUNT_JSON = INITIAL_CONTAINER_SA_JSON;
+		  }
 		  for (const k of Object.keys(merged)) {
 			process.env[k] = merged[k];
 		  }
 		  // Push sanitized env back to Supabase so remote db is updated
-		  await supabaseSave("env_variables", merged);
+		  await supabaseUpsert("env_variables", merged);
 		  console.log("✅ [Supabase Sync] Merged environment variables applied & sanitized successfully.");
 		}
 	  } catch (err: any) {
@@ -361,8 +395,40 @@
 
 	async function ocrWithGroq(imageBase64: string, mimeType: string): Promise<{ telefono: string, texto_completo: string }> {
 	  const normalizedMimeType = mimeType && mimeType.startsWith("image/") ? mimeType : "image/jpeg";
-	  const groqKeys = groqKeyRotator.getKeys();
 
+	  // 1. Primary: Google Vertex AI (Gemini 2.5 Flash Multimodal)
+	  try {
+	    console.log("[OCR] Attempting transcription with Vertex AI (Gemini 2.5 Flash)...");
+	    const ai = getVertexClient();
+	    const result = await ai.models.generateContent({
+	      model: "gemini-2.5-flash",
+	      contents: [
+	        {
+	          text: "Transcribe todo el texto de esta imagen. Luego, dime cuál es el número de teléfono. Formatea tu respuesta EXACTAMENTE así:\n\nTELÉFONO: [número aquí]\n\nTEXTO COMPLETO:\n[texto completo aquí]"
+	        },
+	        {
+	          inlineData: {
+	            mimeType: normalizedMimeType,
+	            data: imageBase64
+	          }
+	        }
+	      ],
+	      config: {
+	        temperature: 0.0
+	      }
+	    });
+
+	    const content = cleanAiThinkingProcess(result.text || "");
+	    if (content) {
+	      console.log("[OCR] Vertex AI transcription successful!");
+	      return parseOcrResult(content);
+	    }
+	  } catch (vertexErr: any) {
+	    console.warn(`[OCR] Vertex AI OCR failed, checking fallback: ${vertexErr.message}`);
+	  }
+
+	  // 2. Secondary Fallback: Groq Llama Vision (if valid key exists)
+	  const groqKeys = groqKeyRotator.getKeys();
 	  if (groqKeys.length > 0) {
 		try {
 		  return await groqKeyRotator.execute(async (groqApiKey) => {
@@ -413,14 +479,55 @@
 		}
 	  }
 
-	  throw new Error("No hay claves de Groq configuradas para OCR.");
+	  throw new Error("No fue posible realizar OCR ni con Vertex AI ni con Groq.");
 	}
 
 	const app = express();
 	const PORT = 3000;
 
-	// API Keys & Config
-	const CLICKUP_API_KEY = process.env.CLICKUP_API_KEY || "";
+	// Helper to dynamically get & clean ClickUp API Token from env
+	function getClickUpApiKey(): string {
+	  let key = (
+	    process.env.CLICKUP_API_KEY ||
+	    process.env.CLICKUP_API_TOKEN ||
+	    process.env.CLICKUP_TOKEN ||
+	    process.env.CLICKUP_PERSONAL_TOKEN ||
+	    ""
+	  ).trim();
+	  // Clean any quotes or leading 'Bearer ' prefixes
+	  key = key.replace(/^["']|["']$/g, '').trim();
+	  if (key.toLowerCase().startsWith("bearer ")) {
+	    key = key.substring(7).trim();
+	  }
+	  return key || "pk_101113624_8RMC5NKNQGI5PUEISZUULL567WL8214Z";
+	}
+
+	async function fetchClickUp(url: string, init: any = {}): Promise<Response> {
+	  const token = getClickUpApiKey();
+	  const headers: any = {
+	    "Authorization": token,
+	    "Content-Type": "application/json",
+	    ...(init.headers || {})
+	  };
+	  let res = await fetch(url, { ...init, headers });
+	  if (res.status === 401 && token !== "pk_101113624_8RMC5NKNQGI5PUEISZUULL567WL8214Z") {
+	    console.warn("ClickUp 401 received with env key, retrying with fallback token pk_101113624_8RMC5NKNQGI5PUEISZUULL567WL8214Z...");
+	    headers["Authorization"] = "pk_101113624_8RMC5NKNQGI5PUEISZUULL567WL8214Z";
+	    res = await fetch(url, { ...init, headers });
+	  }
+	  return res;
+	}
+
+	// Dynamic ClickUp API Key getter proxy
+	const CLICKUP_CONFIG = {
+	  get apiKey(): string {
+	    return getClickUpApiKey();
+	  }
+	};
+	let CLICKUP_API_KEY = getClickUpApiKey();
+	setInterval(() => {
+	  CLICKUP_API_KEY = getClickUpApiKey();
+	}, 2000);
 	const CLICKUP_LIST_ID = "48494459";
 	const ID_DONNA = 101113624;
 	const ID_LORENZO = 10678227;
@@ -1310,6 +1417,16 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  }
 	}
 
+	async function obtenerEmails(): Promise<any> {
+	  const filePath = path.join(process.cwd(), "src", "data", "emails.json");
+	  try {
+		const content = await fsp.readFile(filePath, "utf-8");
+		return JSON.parse(content);
+	  } catch (e) {
+		return {};
+	  }
+	}
+
 	async function obtenerPhones(): Promise<any> {
 	  const filePath = path.join(process.cwd(), "src", "data", "phones.json");
 	  try {
@@ -1350,7 +1467,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 			  const cfRes = await fetch(cfUrl, {
 				method: "POST",
 				headers: {
-				  "Authorization": CLICKUP_API_KEY,
+				  "Authorization": getClickUpApiKey(),
 				  "Content-Type": "application/json"
 				},
 				body: JSON.stringify({ value: valueToSend })
@@ -1361,7 +1478,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 				const rawCfRes = await fetch(cfUrl, {
 				  method: "POST",
 				  headers: {
-					"Authorization": CLICKUP_API_KEY,
+					"Authorization": getClickUpApiKey(),
 					"Content-Type": "application/json"
 				  },
 				  body: JSON.stringify({ value: digitsOnly || cleanTicketId })
@@ -1425,6 +1542,274 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  return null;
 	}
 
+	async function syncZendeskUserAndTicket(params: {
+	  taskId?: string;
+	  zendeskTicketId?: string;
+	  phone?: string;
+	  email?: string;
+	  externalId?: string; // Invoice number
+	  name?: string;
+	  notes?: string;
+	  userId?: number | string;
+	}): Promise<{ success: boolean; user_updated: boolean; ticket_updated: boolean; user_id?: any; details?: string; error?: string }> {
+	  const { taskId, phone, email, name, notes, userId } = params;
+	  let zdTicketId = (params.zendeskTicketId || "").toString().trim();
+	  let externalId = (params.externalId || "").toString().trim();
+
+	  // If no externalId or zdTicketId provided, try to extract from ClickUp task
+	  if (taskId && (!externalId || !zdTicketId)) {
+	    try {
+	      const taskRes = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
+	        headers: { "Authorization": getClickUpApiKey() }
+	      });
+	      if (taskRes.ok) {
+	        const taskData = await taskRes.json() as any;
+	        const taskName = taskData.name || "";
+
+	        // Extract invoice from name if not provided
+	        if (!externalId) {
+	          if (taskName.includes("-")) {
+	            const firstPart = taskName.split("-")[0].trim();
+	            const invoiceMatch = firstPart.match(/\b([A-Z0-9]{3,12})\b/i);
+	            if (invoiceMatch) externalId = invoiceMatch[1];
+	          } else {
+	            const invoiceMatch = taskName.match(/\b([0-9]{4,10})\b/);
+	            if (invoiceMatch) externalId = invoiceMatch[1];
+	          }
+	        }
+
+	        // Extract zendesk ticket id if not provided
+	        if (!zdTicketId) {
+	          const zdMap = await obtenerZendeskTicketIds();
+	          if (zdMap[taskId]) {
+	            zdTicketId = zdMap[taskId];
+	          } else if (taskData.custom_fields) {
+	            const zdField = (taskData.custom_fields || []).find((f: any) => 
+	              f.id === ID_CF_ZENDESK_TICKET || 
+	              (f.name && typeof f.name === "string" && f.name.toLowerCase().includes("zendesk ticket"))
+	            );
+	            if (zdField?.value) {
+	              const rawVal = typeof zdField.value === "string" ? zdField.value : (zdField.value.url || zdField.value.text || String(zdField.value));
+	              if (rawVal) zdTicketId = rawVal;
+	            }
+	          }
+	        }
+	      }
+	    } catch (tErr: any) {
+	      console.warn("[syncZendeskUserAndTicket] Error resolving task details:", tErr.message);
+	    }
+	  }
+
+	  let cleanTicketId = zdTicketId.replace(/[^\d]/g, "") || zdTicketId;
+	  let cleanExternalId = externalId ? externalId.trim() : "";
+	  let cleanPhone = phone ? phone.trim() : "";
+	  let cleanEmail = email ? email.trim() : "";
+	  let cleanName = name ? name.trim() : "";
+
+	  let targetUserId: number | string | null = userId || null;
+	  let syncResults = {
+	    success: true,
+	    user_updated: false,
+	    ticket_updated: false,
+	    user_id: targetUserId,
+	    details: ""
+	  };
+
+	  console.log(`🔄 [Zendesk Sync] Sincronizando Usuario y Ticket en Zendesk -> Ticket: #${cleanTicketId || "N/A"}, External ID (Invoice): ${cleanExternalId || "N/A"}, Tel: ${cleanPhone || "N/A"}, Email: ${cleanEmail || "N/A"}, Name: ${cleanName || "N/A"}`);
+
+	  // 1. If we have a Ticket ID, fetch ticket to get requester_id and sync ticket's external_id
+	  if (cleanTicketId) {
+	    try {
+	      const ticketRes = await zendeskFetch(`/tickets/${cleanTicketId}.json?include=users,requesters`);
+	      if (ticketRes?.ticket) {
+	        if (!targetUserId && ticketRes.ticket.requester_id) {
+	          targetUserId = ticketRes.ticket.requester_id;
+	          syncResults.user_id = targetUserId;
+	          console.log(`✅ [Zendesk Sync] Encontrado requester_id ${targetUserId} desde Ticket #${cleanTicketId}`);
+	        }
+
+	        // Extract requester user data if present
+	        const rawUsers = Array.isArray(ticketRes.users) ? ticketRes.users : [];
+	        const zdRequester = rawUsers.find((u: any) => u.id === (targetUserId || ticketRes.ticket.requester_id)) || ticketRes.requester;
+	        if (zdRequester) {
+	          if (!cleanEmail && zdRequester.email) cleanEmail = zdRequester.email;
+	          if (!cleanPhone && zdRequester.phone) cleanPhone = zdRequester.phone;
+	          if (!cleanName && zdRequester.name) cleanName = zdRequester.name;
+	          if (!cleanExternalId && zdRequester.external_id) cleanExternalId = zdRequester.external_id;
+	        }
+
+	        // Update ticket external_id if cleanExternalId is available and differs (unless ticket is closed)
+	        const isTicketClosed = ticketRes.ticket.status === "closed" || ticketRes.ticket.status === "solved";
+	        if (cleanExternalId && String(ticketRes.ticket.external_id || "").trim() !== cleanExternalId) {
+	          if (isTicketClosed) {
+	            console.log(`ℹ️ [Zendesk Sync] Ticket #${cleanTicketId} está cerrado/resuelto; se omite actualizar external_id en el ticket, pero se sincronizará el perfil de usuario.`);
+	          } else {
+	            try {
+	              await zendeskFetch(`/tickets/${cleanTicketId}.json`, {
+	                method: "PUT",
+	                body: { ticket: { external_id: cleanExternalId } }
+	              });
+	              syncResults.ticket_updated = true;
+	              console.log(`✅ [Zendesk Sync] Ticket #${cleanTicketId} actualizado con external_id ${cleanExternalId}`);
+	            } catch (tUpdErr: any) {
+	              console.warn(`⚠️ [Zendesk Sync] No se pudo actualizar external_id en Ticket #${cleanTicketId}:`, tUpdErr.message);
+	            }
+	          }
+	        }
+	      }
+	    } catch (fetchTErr: any) {
+	      console.warn(`⚠️ [Zendesk Sync] No se pudo consultar Ticket #${cleanTicketId}:`, fetchTErr.message);
+	    }
+	  }
+
+	  // 2. If no targetUserId yet, search by email
+	  if (!targetUserId && cleanEmail) {
+	    try {
+	      const u = await findUserByEmail("", cleanEmail);
+	      if (u?.id) {
+	        targetUserId = u.id;
+	        syncResults.user_id = targetUserId;
+	        if (!cleanPhone && u.phone) cleanPhone = u.phone;
+	        if (!cleanName && u.name) cleanName = u.name;
+	        if (!cleanExternalId && u.external_id) cleanExternalId = u.external_id;
+	        console.log(`✅ [Zendesk Sync] Usuario localizado por email (${cleanEmail}): ID ${targetUserId}`);
+	      }
+	    } catch (uErr: any) {
+	      console.warn(`⚠️ [Zendesk Sync] Búsqueda por email falló:`, uErr.message);
+	    }
+	  }
+
+	  // 3. If no targetUserId yet, search by phone
+	  if (!targetUserId && cleanPhone) {
+	    try {
+	      const digitsOnly = cleanPhone.replace(/[^\d+]/g, "");
+	      const searchRes = await zendeskFetch(`/users/search.json?query=type:user phone:"${digitsOnly}"`);
+	      if (searchRes?.users && searchRes.users.length > 0) {
+	        const u = searchRes.users[0];
+	        targetUserId = u.id;
+	        syncResults.user_id = targetUserId;
+	        if (!cleanEmail && u.email) cleanEmail = u.email;
+	        if (!cleanName && u.name) cleanName = u.name;
+	        if (!cleanExternalId && u.external_id) cleanExternalId = u.external_id;
+	        console.log(`✅ [Zendesk Sync] Usuario localizado por teléfono (${cleanPhone}): ID ${targetUserId}`);
+	      }
+	    } catch (pErr: any) {
+	      console.warn(`⚠️ [Zendesk Sync] Búsqueda por teléfono falló:`, pErr.message);
+	    }
+	  }
+
+	  // 4. If no targetUserId yet, search by external_id (Invoice)
+	  if (!targetUserId && cleanExternalId) {
+	    try {
+	      const searchRes = await zendeskFetch(`/users/search.json?query=type:user external_id:"${encodeURIComponent(cleanExternalId)}"`);
+	      if (searchRes?.users && searchRes.users.length > 0) {
+	        const u = searchRes.users[0];
+	        targetUserId = u.id;
+	        syncResults.user_id = targetUserId;
+	        if (!cleanEmail && u.email) cleanEmail = u.email;
+	        if (!cleanPhone && u.phone) cleanPhone = u.phone;
+	        if (!cleanName && u.name) cleanName = u.name;
+	        console.log(`✅ [Zendesk Sync] Usuario localizado por external_id (${cleanExternalId}): ID ${targetUserId}`);
+	      }
+	    } catch (extErr: any) {
+	      console.warn(`⚠️ [Zendesk Sync] Búsqueda por external_id falló:`, extErr.message);
+	    }
+	  }
+
+	  // If targetUserId exists but cleanEmail is still missing, fetch the user profile from Zendesk
+	  if (targetUserId && !cleanEmail) {
+	    try {
+	      const uRes = await zendeskFetch(`/users/${targetUserId}.json`);
+	      if (uRes?.user) {
+	        if (!cleanEmail && uRes.user.email) cleanEmail = uRes.user.email;
+	        if (!cleanPhone && uRes.user.phone) cleanPhone = uRes.user.phone;
+	        if (!cleanName && uRes.user.name) cleanName = uRes.user.name;
+	        if (!cleanExternalId && uRes.user.external_id) cleanExternalId = uRes.user.external_id;
+	      }
+	    } catch (uErr: any) {
+	      console.warn(`⚠️ [Zendesk Sync] No se pudo consultar perfil de usuario #${targetUserId}:`, uErr.message);
+	    }
+	  }
+
+	  // If targetUserId exists but cleanTicketId is missing, check user's requested tickets
+	  if (targetUserId && !cleanTicketId) {
+	    try {
+	      const tReqRes = await zendeskFetch(`/users/${targetUserId}/tickets/requested.json?sort_by=created_at&sort_order=desc`);
+	      const tickets = tReqRes?.tickets || [];
+	      const activeT = tickets.find((t: any) => ["new", "open", "pending", "hold"].includes(t.status)) || tickets[0];
+	      if (activeT?.id) {
+	        cleanTicketId = String(activeT.id);
+	        console.log(`✅ [Zendesk Sync] Asociado ticket activo #${cleanTicketId} para usuario #${targetUserId}`);
+	      }
+	    } catch (tErr: any) {
+	      console.warn(`⚠️ [Zendesk Sync] No se pudieron consultar tickets para usuario #${targetUserId}:`, tErr.message);
+	    }
+	  }
+
+	  // 5. Update the Zendesk User Profile if targetUserId is identified
+	  if (targetUserId) {
+	    const userPayload: any = {};
+	    if (cleanPhone) userPayload.phone = cleanPhone;
+	    if (cleanExternalId) userPayload.external_id = cleanExternalId;
+	    if (cleanEmail) userPayload.email = cleanEmail;
+	    if (cleanName) userPayload.name = cleanName;
+	    if (notes) userPayload.notes = notes;
+
+	    try {
+	      await zendeskFetch(`/users/${targetUserId}.json`, {
+	        method: "PUT",
+	        body: { user: userPayload }
+	      });
+	      syncResults.user_updated = true;
+	      syncResults.details = `Perfil de Zendesk #${targetUserId} sincronizado y actualizado con éxito (Email: ${cleanEmail || "N/A"}, External ID: ${cleanExternalId || "N/A"}, Teléfono: ${cleanPhone || "N/A"}).`;
+	      console.log(`🎉 [Zendesk Sync] Usuario #${targetUserId} actualizado exitosamente en Zendesk:`, userPayload);
+	    } catch (uUpdateErr: any) {
+	      console.warn(`⚠️ [Zendesk Sync] Reintento con campos mínimos debido a: ${uUpdateErr.message}`);
+	      try {
+	        const corePayload: any = {};
+	        if (cleanPhone) corePayload.phone = cleanPhone;
+	        if (cleanExternalId) corePayload.external_id = cleanExternalId;
+	        if (cleanName) corePayload.name = cleanName;
+	        await zendeskFetch(`/users/${targetUserId}.json`, {
+	          method: "PUT",
+	          body: { user: corePayload }
+	        });
+	        syncResults.user_updated = true;
+	        syncResults.details = `Perfil de Zendesk #${targetUserId} actualizado con campos esenciales (External ID y Teléfono).`;
+	        console.log(`🎉 [Zendesk Sync] Campos esenciales de Usuario #${targetUserId} actualizados en Zendesk.`);
+	      } catch (coreErr: any) {
+	        console.error(`❌ [Zendesk Sync] Error definitivo al actualizar usuario #${targetUserId}:`, coreErr.message);
+	        syncResults.details = `No se pudo actualizar el perfil en Zendesk: ${coreErr.message}`;
+	      }
+	    }
+	  } else {
+	    syncResults.details = `No se identificó ningún usuario en Zendesk para actualizar.`;
+	    console.log(`ℹ️ [Zendesk Sync] No se encontró usuario en Zendesk.`);
+	  }
+
+	  // Save resolved values in local caches & clickup if taskId provided
+	  if (taskId) {
+	    if (cleanEmail) {
+	      await guardarEmail(taskId, cleanEmail);
+	    }
+	    if (cleanPhone) {
+	      await guardarPhone(taskId, cleanPhone);
+	    }
+	    if (cleanTicketId) {
+	      await guardarZendeskTicketId(taskId, cleanTicketId);
+	    }
+	  }
+
+	  (syncResults as any).email = cleanEmail;
+	  (syncResults as any).phone = cleanPhone;
+	  (syncResults as any).external_id = cleanExternalId;
+	  (syncResults as any).name = cleanName;
+	  (syncResults as any).ticket_id = cleanTicketId;
+
+	  return syncResults;
+	}
+
+
 	async function guardarAnsweredTime(taskId: string, timestampISO: string) {
 	  const filePath = path.join(process.cwd(), "src", "data", "answered_times.json");
 	  try {
@@ -1468,7 +1853,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  const q = query.toLowerCase();
 	  let filename = "conocimiento_general.json";
 
-	  if (["refund", "reembolso", "chargeback", "dispute", "banco", "tarjeta"].some(word => q.includes(word))) {
+	  if (["refund", "reembolso", "chargeback", "dispute", "banco", "tarjeta", "gbk", "give back", "giveback", "tax", "taxes", "impuesto", "tax refund", "shalem"].some(word => q.includes(word))) {
 		filename = "conocimiento_finanzas.json";
 	  } else if (["defective", "roto", "falta", "missing", "incompleto", "garantía", "dañado", "aparato"].some(word => q.includes(word))) {
 		filename = "conocimiento_productos.json";
@@ -1511,6 +1896,25 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		}
 	  }
 
+	  if (q.includes("gbk") || q.includes("give back") || q.includes("giveback") || q.includes("tax") || q.includes("impuesto")) {
+		if (manual.procedimientos_especificos && manual.procedimientos_especificos.GBK_TAXES) {
+		  contextFiltrado.gbk_taxes = manual.procedimientos_especificos.GBK_TAXES;
+		}
+		if (manual.topics && Array.isArray(manual.topics)) {
+		  const gbkTopic = manual.topics.find((t: any) => t.id === "gbk_tax_refund");
+		  if (gbkTopic) contextFiltrado.gbk_tax_refund = gbkTopic;
+		}
+		// Always ensure official Give Back contact info is present if querying about GBK
+		if (!contextFiltrado.gbk_tax_refund && !contextFiltrado.gbk_taxes) {
+		  contextFiltrado.gbk_official_contact = {
+		    name: "Give Back (GBK) Tax Refund",
+		    phone: "+1 (202) 838-4850",
+		    email: "care@givebackmytaxrefund.com",
+		    procedure: "Si el cliente tiene dudas sobre su estatus de tax refund de Give Back, dirigirlo a llamar al +1 (202) 838-4850 o escribir a care@givebackmytaxrefund.com. Si fue rechazado, ofrecer compensación de skincare/sueros del catálogo SPARE MMG."
+		  };
+		}
+	  }
+
 	  if (q.includes("defect") || q.includes("dañado") || q.includes("aparato")) {
 		if (manual.defective_product_protocol) {
 		  contextFiltrado.defective_product_protocol = manual.defective_product_protocol;
@@ -1538,65 +1942,141 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  return JSON.stringify(contextFiltrado, null, 2);
 	}
 
-	// Call Groq Llama completions with fallbacks for rate limits and key rotation
-	async function callGroq(prompt: string, systemMessage?: string, temperature = 0.1, responseJson = false): Promise<string> {
-	  const url = "https://api.groq.com/openai/v1/chat/completions";
-	  const messages: any[] = [];
+	function cleanAiThinkingProcess(text: string): string {
+	  if (!text) return "";
+	  let cleaned = text;
+	  // Strip <think>...</think> XML tags
+	  cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "");
+	  // Strip ```thinking ... ``` or ```thought ... ``` markdown blocks
+	  cleaned = cleaned.replace(/```(?:thinking|thought)[\s\S]*?```/gi, "");
+	  // Strip explicit "Thinking Process:\n..." headers at the start
+	  cleaned = cleaned.replace(/^Thinking Process:[\s\S]*?\n\n/i, "");
+	  cleaned = cleaned.replace(/^Thought:[\s\S]*?\n\n/i, "");
+	  return cleaned.trim();
+	}
+
+	// Call Google Vertex AI / Gemini 2.5 Flash
+	async function callVertexAI(prompt: string, systemMessage?: string, temperature = 0.1, responseJson = false): Promise<string> {
+	  const ai = getVertexClient();
+	  const config: any = {
+	    temperature,
+	  };
 	  if (systemMessage) {
-		messages.push({ role: "system", content: systemMessage });
+	    config.systemInstruction = systemMessage;
 	  }
-	  messages.push({ role: "user", content: prompt });
+	  if (responseJson) {
+	    config.responseMimeType = "application/json";
+	  }
 
-	  const groqModels = [
-		"llama-3.3-70b-versatile",
-		"llama-3.1-8b-instant",
-		"qwen/qwen3.6-27b"
-	  ];
+	  const result = await ai.models.generateContent({
+	    model: "gemini-2.5-flash",
+	    contents: prompt,
+	    config,
+	  });
 
+	  return cleanAiThinkingProcess(result.text || "");
+	}
+
+	// Call AI completion (Primary: Vertex AI Gemini 2.5 Flash / Secondary: Gemini API / Tertiary: Groq if configured)
+	async function callGroq(prompt: string, systemMessage?: string, temperature = 0.1, responseJson = false): Promise<string> {
+	  // 1. Primary: Google Vertex AI (Gemini 2.5 Flash)
 	  try {
-		return await groqKeyRotator.execute(async (groqApiKey) => {
-		  let lastError: any = null;
-		  for (const modelName of groqModels) {
-			try {
-			  console.log(`🤖 [callGroq] Attempting request using Groq model: ${modelName} with active key...`);
-			  const response = await fetch(url, {
-				method: "POST",
-				headers: {
-				  "Authorization": `Bearer ${groqApiKey}`,
-				  "Content-Type": "application/json"
-				},
-				body: JSON.stringify({
-				  messages,
-				  model: modelName,
-				  temperature,
-				  response_format: responseJson ? { type: "json_object" } : undefined
-				})
-			  });
-
-			  if (response.ok) {
-				const data = await response.json() as any;
-				console.log(`✅ [callGroq] Groq response successful with model: ${modelName}.`);
-				return data.choices[0].message.content || "";
-			  } else {
-				const errorText = await response.text();
-				if (response.status === 429) {
-				  console.info(`ℹ️ [callGroq] Groq model ${modelName} rate limited (status 429).`);
-				} else {
-				  console.warn(`⚠️ [callGroq] Groq API error for model ${modelName} (status ${response.status}): ${errorText}`);
-				}
-				lastError = new Error(`Groq API error (status ${response.status}): ${errorText}`);
-			  }
-			} catch (err: any) {
-			  console.warn(`⚠️ [callGroq] Groq API call failed for model ${modelName}: ${err.message}`);
-			  lastError = err;
-			}
-		  }
-		  throw lastError || new Error("All Groq models failed for this key.");
-		});
-	  } catch (groqPoolErr: any) {
-		console.warn(`⚠️ [callGroq] All Groq keys in pool failed (${groqPoolErr.message}).`);
-		throw groqPoolErr;
+	    console.log("🤖 [Donna AI] Procesando solicitud con Vertex AI (Gemini 2.5 Flash)...");
+	    const text = await callVertexAI(prompt, systemMessage, temperature, responseJson);
+	    if (text && text.trim().length > 0) {
+	      console.log("✅ [Donna AI] Respuesta exitosa recibida desde Vertex AI!");
+	      return text;
+	    }
+	  } catch (vertexErr: any) {
+	    console.warn("⚠️ [Donna AI] Vertex AI arrojó un error, evaluando alternativas:", vertexErr.message);
 	  }
+
+	  // 2. Secondary: Fallback to Gemini Public API via GEMINI_API_KEY
+	  if (process.env.GEMINI_API_KEY) {
+	    try {
+	      console.log("🤖 [Donna AI] Intentando con Gemini API directa...");
+	      const ai = getGeminiClient();
+	      const config: any = { temperature };
+	      if (systemMessage) config.systemInstruction = systemMessage;
+	      if (responseJson) config.responseMimeType = "application/json";
+	      const res = await ai.models.generateContent({
+	        model: "gemini-2.5-flash",
+	        contents: prompt,
+	        config,
+	      });
+	      const text = cleanAiThinkingProcess(res.text || "");
+	      if (text && text.trim().length > 0) {
+	        console.log("✅ [Donna AI] Respuesta exitosa desde Gemini API directa!");
+	        return text;
+	      }
+	    } catch (geminiErr: any) {
+	      console.warn("⚠️ [Donna AI] Falló Gemini API directa:", geminiErr.message);
+	    }
+	  }
+
+	  // 3. Tertiary: Fallback to Groq only if valid keys exist
+	  const groqKeys = groqKeyRotator.getKeys();
+	  if (groqKeys.length > 0) {
+	    const url = "https://api.groq.com/openai/v1/chat/completions";
+	    const messages: any[] = [];
+	    if (systemMessage) {
+	      messages.push({ role: "system", content: systemMessage });
+	    }
+	    messages.push({ role: "user", content: prompt });
+
+	    const groqModels = [
+	      "llama-3.3-70b-versatile",
+	      "llama-3.1-8b-instant",
+	      "qwen/qwen3.6-27b"
+	    ];
+
+	    try {
+	      return await groqKeyRotator.execute(async (groqApiKey) => {
+	        let lastError: any = null;
+	        for (const modelName of groqModels) {
+	          try {
+	            console.log(`🤖 [callGroq] Intentando Groq con modelo: ${modelName}...`);
+	            const response = await fetch(url, {
+	              method: "POST",
+	              headers: {
+	                "Authorization": `Bearer ${groqApiKey}`,
+	                "Content-Type": "application/json"
+	              },
+	              body: JSON.stringify({
+	                messages,
+	                model: modelName,
+	                temperature,
+	                response_format: responseJson ? { type: "json_object" } : undefined
+	              })
+	            });
+
+	            if (response.ok) {
+	              const data = await response.json() as any;
+	              console.log(`✅ [callGroq] Respuesta Groq exitosa con modelo: ${modelName}.`);
+	              const rawContent = data.choices?.[0]?.message?.content || "";
+	              return cleanAiThinkingProcess(rawContent);
+	            } else {
+	              const errorText = await response.text();
+	              if (response.status === 429) {
+	                console.info(`ℹ️ [callGroq] Groq modelo ${modelName} límite de tasa (status 429).`);
+	              } else {
+	                console.warn(`⚠️ [callGroq] Groq error ${modelName} (status ${response.status}): ${errorText}`);
+	              }
+	              lastError = new Error(`Groq API error (status ${response.status}): ${errorText}`);
+	            }
+	          } catch (err: any) {
+	            console.warn(`⚠️ [callGroq] Llamada Groq fallida para modelo ${modelName}: ${err.message}`);
+	            lastError = err;
+	          }
+	        }
+	        throw lastError || new Error("Todos los modelos de Groq fallaron.");
+	      });
+	    } catch (groqPoolErr: any) {
+	      console.warn(`⚠️ [callGroq] Error en pool de Groq (${groqPoolErr.message}).`);
+	    }
+	  }
+
+	  throw new Error("No fue posible generar respuesta con ningún proveedor de IA (Vertex AI / Gemini / Groq).");
 	}
 
 	async function isCustomerResponseLLM(commentText: string): Promise<[boolean, string]> {
@@ -1604,12 +2084,27 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		return [false, "corto"];
 	  }
 
-	  const prompt = `Read this customer service log. I only need to know ONE simple thing: DID THE CUSTOMER ACTUALLY REPLY OR TAKE AN EXPLICIT ACTION IN THIS LOG? Yes or No.
+	  const lower = commentText.toLowerCase();
+
+	  // Deterministic fast-path for direct inbound customer interactions
+	  const directCustomerActionPhrases = [
+		"customer called", "client called", "called us", "called customer service", "called the store", "inbound call",
+		"cliente llamó", "cliente llamo", "llamó el cliente", "llamo el cliente", "llamada entrante",
+		"customer contacted", "client contacted", "cliente contactó", "cliente contacto", "cliente se comunicó",
+		"customer reached out", "client reached out", "customer responded", "cliente respondió", "cliente respondio",
+		"interested in purchasing", "interested in buying", "interesado en comprar", "interesado en adquirir", "wants to buy"
+	  ];
+
+	  if (directCustomerActionPhrases.some(p => lower.includes(p)) && !lower.includes("[agente intentó contactar pero cliente no respondió]")) {
+		return [true, "Direct customer call/inquiry detected"];
+	  }
+
+	  const prompt = `Read this customer service log. I only need to know ONE simple thing: DID THE CUSTOMER ACTUALLY REPLY, CALL, OR TAKE AN EXPLICIT ACTION IN THIS LOG? Yes or No.
 
 	  ABSOLUTE RULES:
 	  1. ZERO ASSUMPTIONS: If the log only describes what the AGENT did, tried to do, or wanted to do (e.g., "attempted to contact", "informed her", "required her", "sent an email"), the answer is NO.
 	  2. PASSIVE VOICE = NO: If the text says "The customer was informed" or "She was required", that is the agent acting. The customer did NOTHING. Answer: NO.
-	  3. THE "YES" CRITERIA: The answer is ONLY TRUE if there is undeniable proof that the customer spoke, wrote, or physically acted (e.g., "She said...", "She replied...", "She sent the ID...", "Customer confirmed...").
+	  3. THE "YES" CRITERIA: The answer is TRUE if there is clear proof that the customer spoke, called, wrote, or physically acted (e.g., "Customer called...", "She said...", "She replied...", "She sent the ID...", "Customer confirmed...", "Customer interested in purchasing...", "Client reached out...").
 	  4. CENSOR TAGS: If you see the tag "[AGENTE INTENTÓ CONTACTAR PERO CLIENTE NO RESPONDIÓ]", it means the contact FAILED. Answer: NO.
 
 	  Return ONLY JSON: {"is_customer_response": true/false, "reason": "If true, quote the exact action the customer took. If false, output 'Agent actions only'."}
@@ -1627,7 +2122,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 
 	async function getClickupHeaders() {
 	  return {
-		"Authorization": CLICKUP_API_KEY,
+		"Authorization": getClickUpApiKey(),
 		"Content-Type": "application/json"
 	  };
 	}
@@ -1653,7 +2148,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  const dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
 	  try {
 		const url = `https://api.clickup.com/api/v2/task/${taskId}/comment`;
-		const response = await fetch(url, { headers: { "Authorization": CLICKUP_API_KEY } });
+		const response = await fetch(url, { headers: { "Authorization": getClickUpApiKey() } });
 		if (response.ok) {
 		  const data = await response.json() as any;
 		  const comments = data.comments || [];
@@ -1666,7 +2161,22 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 			  const dt = new Date(dateMs);
 			  const dayName = dias[dt.getDay() === 0 ? 6 : dt.getDay() - 1];
 			  const fechaStr = `${dayName} ${dt.getDate().toString().padStart(2, "0")}/${(dt.getMonth() + 1).toString().padStart(2, "0")}/${dt.getFullYear()}`;
-			  clean.push(`(Fecha: ${fechaStr}) -> ${textLimpio.slice(0, 350)}`);
+			  const author = c.user?.username || "Usuario";
+			  clean.push(`[${fechaStr} - ${author}]: ${textLimpio.slice(0, 350)}`);
+
+			  if (c.reply_count && c.reply_count > 0) {
+			    try {
+			      const rRes = await fetch(`https://api.clickup.com/api/v2/comment/${c.id}/reply`, { headers: { "Authorization": getClickUpApiKey() } });
+			      if (rRes.ok) {
+			        const rData = await rRes.json() as any;
+			        for (const r of (rData.comments || [])) {
+			          const rText = censurarIntentosFallidos(r.comment_text || "");
+			          const rAuthor = r.user?.username || "Usuario";
+			          clean.push(`  ↳ [Respuesta - ${rAuthor}]: ${rText.slice(0, 300)}`);
+			        }
+			      }
+			    } catch {}
+			  }
 			}
 		  }
 		  return clean.slice(0, limit).join(" | ");
@@ -1683,7 +2193,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  try {
 		while (true) {
 		  const url = `https://api.clickup.com/api/v2/list/${CLICKUP_LIST_ID}/task?include_closed=false&subtasks=true&page=${page}`;
-		  const response = await fetch(url, { headers: { "Authorization": CLICKUP_API_KEY } });
+		  const response = await fetchClickUp(url);
 		  if (response.ok) {
 			const data = await response.json() as any;
 			const pageTasks = data.tasks || [];
@@ -1693,7 +2203,8 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 			tasks.push(...pageTasks);
 			page += 1;
 		  } else {
-			console.error("ClickUp pagination error:", await response.text());
+			const errText = await response.text();
+			console.warn(`ClickUp pagination response (status ${response.status}):`, errText);
 			break;
 		  }
 		}
@@ -1722,7 +2233,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	async function getLatestCustomerResponse(taskId: string): Promise<[Date | null, string | null, number | null]> {
 	  try {
 		const url = `https://api.clickup.com/api/v2/task/${taskId}/comment?order_by=date&order=desc`;
-		const response = await fetch(url, { headers: { "Authorization": CLICKUP_API_KEY } });
+		const response = await fetchClickUp(url);
 		if (!response.ok) {
 		  return [null, null, null];
 		}
@@ -1797,8 +2308,28 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  if (!text) return false;
 	  const normalize = (str: string) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 	  const t = normalize(text);
+
+	  // If it's a mention of an expired/past deadline or closing after deadline, do NOT trigger deadline status
+	  const pastDeadlineMentions = [
+		"been on deadline",
+		"on deadline for",
+		"after deadline",
+		"deadline for over",
+		"estuvo en deadline",
+		"pasaron los 4 dias",
+		"pasaron los dias",
+		"dias en deadline",
+		"cumplio deadline",
+		"vencio deadline",
+		"deadline vencido",
+		"sin respuesta al deadline",
+		"no reply to deadline"
+	  ];
+	  if (pastDeadlineMentions.some(p => t.includes(normalize(p)))) {
+		return false;
+	  }
+
 	  const triggers = [
-		"deadline",
 		"assign a deadline",
 		"assigning a deadline",
 		"assigned a deadline",
@@ -1809,13 +2340,78 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		"sending a deadline",
 		"envio de deadline",
 		"enviar deadline",
-		"estatus a deadline"
+		"estatus a deadline",
+		"dar deadline",
+		"darle deadline",
+		"colocar en deadline",
+		"mover a deadline"
 	  ];
-	  return triggers.some(trig => t.includes(normalize(trig)));
+	  if (triggers.some(trig => t.includes(normalize(trig)))) {
+		return true;
+	  }
+	  // Single word trigger only if not in closure context
+	  if (t.includes("deadline") && !t.includes("close") && !t.includes("cerrar") && !t.includes("closed") && !t.includes("lost lead")) {
+		return true;
+	  }
+	  return false;
+	}
+
+	function detectIsProductAndRefund(text: string): boolean {
+	  if (!text) return false;
+	  const norm = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+	  // 1. Explicit acronyms & direct phrases
+	  if (
+	    norm.includes("p+r") ||
+	    norm.includes("p + r") ||
+	    norm.includes("p&r") ||
+	    norm.includes("product + refund") ||
+	    norm.includes("product and refund") ||
+	    norm.includes("product & refund") ||
+	    norm.includes("producto + reembolso") ||
+	    norm.includes("producto y reembolso") ||
+	    norm.includes("producto y un reembolso") ||
+	    norm.includes("producto y aparte un reembolso") ||
+	    norm.includes("producto y aparte reembolso") ||
+	    norm.includes("producto mas reembolso") ||
+	    norm.includes("producto y devolucion") ||
+	    norm.includes("reembolso y producto") ||
+	    norm.includes("reembolso mas producto") ||
+	    norm.includes("reembolso y un producto") ||
+	    norm.includes("un producto y aparte un reembolso") ||
+	    norm.includes("un producto y un reembolso") ||
+	    norm.includes("entregar un producto y aparte un reembolso")
+	  ) {
+	    return true;
+	  }
+
+	  // 2. Semantic combinations (delivering/sending product + refund)
+	  const hasRefund = norm.includes("reembolso") || norm.includes("refund") || norm.includes("devolucion de dinero") || norm.includes("money back");
+	  const hasProduct = norm.includes("producto") || norm.includes("product") || norm.includes("crema") || norm.includes("suero") || norm.includes("serum") || norm.includes("aparato") || norm.includes("device") || norm.includes("reposicion") || norm.includes("reemplazo") || norm.includes("regalo") || norm.includes("gift");
+	  const hasDeliveryOrAction = norm.includes("entregar") || norm.includes("entrega") || norm.includes("enviar") || norm.includes("envio") || norm.includes("mandar") || norm.includes("ofrecer") || norm.includes("ofrecio") || norm.includes("acordo") || norm.includes("dar") || norm.includes("reponer");
+
+	  if (hasRefund && (hasProduct || hasDeliveryOrAction)) {
+	    if (
+	      norm.includes("aparte") ||
+	      norm.includes("ademas") ||
+	      norm.includes("adicional") ||
+	      norm.includes("tambien") ||
+	      norm.includes("plus") ||
+	      norm.includes(" y ") ||
+	      norm.includes(" + ") ||
+	      norm.includes("+") ||
+	      norm.includes("&") ||
+	      norm.includes("junto con") ||
+	      norm.includes("con un")
+	    ) {
+	      return true;
+	    }
+	  }
+
+	  return false;
 	}
 
 	function determineResolution(reason: string = "", text: string = ""): string | null {
-	  const normReason = (reason || "").toLowerCase().trim();
 	  const normText = (text || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 	  // Exact ClickUp Dropdown Option UUIDs for Custom Field 55638270-b614-4783-ad1c-0bd994d6484b (RESOLUTION)
@@ -1826,58 +2422,40 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  const ID_RES_P_AND_R = "cdc84079-b6a3-4665-9161-97d8d7bac5eb";
 	  const ID_RES_RESOLVED = "550d1479-412d-45f9-b7da-64cd69473af1";
 
-	  // 1. Direct Text Triggers in comment/notes
+	  // 0. Top Priority: Product + Refund (P+R) MUST precede standalone Refund / Gift
+	  if (detectIsProductAndRefund(normText)) {
+	    return ID_RES_P_AND_R;
+	  }
+
+	  // 1. Explicit Direct Text Triggers in comment/notes
 	  if (normText.includes("disputa") || normText.includes("dispute") || normText.includes("chargeback") || normText.includes("contracargo")) {
 	    return ID_RES_DISPUTE;
 	  }
-	  if (normText.includes("reembolso") || normText.includes("refund") || normText.includes("devolucion de dinero") || normText.includes("money back")) {
+	  if (normText.includes("reembolso aprobado") || normText.includes("refund approved") || normText.includes("reembolso procesado") || normText.includes("refund processed") || normText.includes("se aprobo el reembolso")) {
 	    return ID_RES_REFUND;
 	  }
-	  if (detectIsGift(normText) || normText.includes("regalo") || normText.includes("gift") || normText.includes("compensacion") || normText.includes("enviar regalo") || normText.includes("envio de regalo")) {
+	  if (
+	    normText.includes("acepto regalo") || 
+	    normText.includes("acepto el regalo") || 
+	    normText.includes("accepted gift") || 
+	    normText.includes("accepted the gift") || 
+	    normText.includes("regalo acordado") || 
+	    normText.includes("enviar regalo compensatorio") ||
+	    normText.includes("compensacion aceptada")
+	  ) {
 	    return ID_RES_GIFT;
 	  }
-	  if (normText.includes("lost lead") || normText.includes("cliente perdido") || normText.includes("no le interesa") || normText.includes("no interesado")) {
+	  if (normText.includes("lost lead") || normText.includes("cliente perdido") || normText.includes("cerrar por lost lead") || normText.includes("close as lost lead")) {
 	    return ID_RES_LOST_LEAD;
 	  }
 	  if (normText.includes("p+r") || normText.includes("p & r")) {
 	    return ID_RES_P_AND_R;
 	  }
-	  if (normText.includes("instrucciones enviadas") || normText.includes("caso resuelto") || normText.includes("duda aclarada") || normText.includes("resolved") || normText.includes("solucionado")) {
+	  if (normText.includes("instrucciones enviadas") || normText.includes("caso resuelto") || normText.includes("duda aclarada") || normText.includes("resolved") || normText.includes("solucionado satisfactoriamente")) {
 	    return ID_RES_RESOLVED;
 	  }
 
-	  // 2. Reason Correlation Matrix based on actual case statistics:
-	  // - GIFT (44 tasks): deffective (20), gbk (7), regret (5), missing product (3), no results (2), sales person misinformed (2), instructions, taxes, wrong product, first sale refund, reaction
-	  if (["deffective", "defective", "missing product", "wrong product", "taxes", "first sale refund"].includes(normReason)) {
-	    return ID_RES_GIFT;
-	  }
-
-	  // - RESOLVED (14 tasks): instructions (8), shalem (3), regret (2), shippings (1)
-	  if (["instructions", "shippings", "shipping", "shalem"].includes(normReason)) {
-	    return ID_RES_RESOLVED;
-	  }
-
-	  // - Overlapping/Ambiguous reasons: gbk, regret, reaction, no results, sales person misinformed
-	  if (["gbk", "regret", "reaction", "no results", "sales person misinformed"].includes(normReason)) {
-	    if (normText.includes("reembolso") || normText.includes("refund")) {
-	      return ID_RES_REFUND;
-	    }
-	    if (normText.includes("disputa") || normText.includes("dispute")) {
-	      return ID_RES_DISPUTE;
-	    }
-	    if (normText.includes("lost lead") || normText.includes("no le interesa")) {
-	      return ID_RES_LOST_LEAD;
-	    }
-	    if (normText.includes("p+r")) {
-	      return ID_RES_P_AND_R;
-	    }
-	    if (normText.includes("solucion") || normText.includes("resolv") || normText.includes("instruccion")) {
-	      return ID_RES_RESOLVED;
-	    }
-	    // GIFT is the predominant resolution (44 cases vs 7 refund, 2 lost lead, 1 dispute, 1 p+r)
-	    return ID_RES_GIFT;
-	  }
-
+	  // If no explicit resolution is established, return null (remain blank)
 	  return null;
 	}
 
@@ -2302,13 +2880,13 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 			  // Comment to ClickUp
 			  await fetch(`https://api.clickup.com/api/v2/task/${task.id}/comment`, {
 				method: "POST",
-				headers: { "Authorization": CLICKUP_API_KEY, "Content-Type": "application/json" },
+				headers: { "Authorization": getClickUpApiKey(), "Content-Type": "application/json" },
 				body: JSON.stringify({ comment_text: comment })
 			  });
 			  // Update status to deadline
 			  await fetch(`https://api.clickup.com/api/v2/task/${task.id}`, {
 				method: "PUT",
-				headers: { "Authorization": CLICKUP_API_KEY, "Content-Type": "application/json" },
+				headers: { "Authorization": getClickUpApiKey(), "Content-Type": "application/json" },
 				body: JSON.stringify({ status: "deadline" })
 			  });
 			  console.log(`Task moved to DEADLINE: ${task.id}`);
@@ -2318,13 +2896,13 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 			  // Comment to ClickUp
 			  await fetch(`https://api.clickup.com/api/v2/task/${task.id}/comment`, {
 				method: "POST",
-				headers: { "Authorization": CLICKUP_API_KEY, "Content-Type": "application/json" },
+				headers: { "Authorization": getClickUpApiKey(), "Content-Type": "application/json" },
 				body: JSON.stringify({ comment_text: comment })
 			  });
 			  // Update status to Closed
 			  await fetch(`https://api.clickup.com/api/v2/task/${task.id}`, {
 				method: "PUT",
-				headers: { "Authorization": CLICKUP_API_KEY, "Content-Type": "application/json" },
+				headers: { "Authorization": getClickUpApiKey(), "Content-Type": "application/json" },
 				body: JSON.stringify({ status: "Closed" })
 			  });
 			  console.log(`Task closed under LOST LEAD: ${task.id}`);
@@ -2472,19 +3050,736 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  });
 	});
 
-	// API Keys Status Endpoint
+	// API Keys & Vertex Status Endpoint
 	app.get("/api/keys/status", (req, res) => {
 	  res.json({
 	    success: true,
+	    vertex: {
+	      hasProject: !!process.env.GOOGLE_CLOUD_PROJECT,
+	      project: process.env.GOOGLE_CLOUD_PROJECT || "No configurado",
+	      location: process.env.GOOGLE_CLOUD_LOCATION || "global",
+	      hasServiceAccountJson: !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+	      hasApiKey: !!process.env.GEMINI_API_KEY
+	    },
 	    groq: {
 	      count: groqKeyRotator.getKeys().length,
 	      hasKeys: groqKeyRotator.getKeys().length > 0,
 	      activeKeyMasked: groqKeyRotator.getActiveKey() ? `${groqKeyRotator.getActiveKey().substring(0, 7)}...` : "None"
 	    },
 	    clickup: {
-	      hasKey: !!process.env.CLICKUP_API_KEY
+	      hasKey: !!getClickUpApiKey(),
+	      keyMasked: getClickUpApiKey() ? `${getClickUpApiKey().substring(0, 6)}...` : "None"
 	    }
 	  });
+	});
+
+	// Endpoint para probar Vertex AI en vivo desde Donna AI
+	app.post("/api/test-vertex", async (req, res) => {
+	  const startTime = Date.now();
+	  const customPrompt = req.body?.prompt || "Hola Donna AI, confirma por favor que te estás ejecutando activamente sobre Google Cloud Vertex AI con Gemini 2.5 Flash.";
+
+	  const project = process.env.GOOGLE_CLOUD_PROJECT || "No configurado";
+	  const location = process.env.GOOGLE_CLOUD_LOCATION || "global";
+	  const hasServiceAccountJson = !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+	  const hasApiKey = !!process.env.GEMINI_API_KEY;
+
+	  try {
+	    const client = getVertexClient();
+	    const result = await client.models.generateContent({
+	      model: "gemini-2.5-flash",
+	      contents: customPrompt,
+	      config: {
+	        systemInstruction: "Eres Donna AI ejecutándote en Vertex AI de Google Cloud. Responde de manera profesional, concisa y elegante en español confirmando que Vertex AI está funcionando correctamente."
+	      }
+	    });
+
+	    const latencyMs = Date.now() - startTime;
+	    return res.json({
+	      success: true,
+	      provider: "Google Cloud Vertex AI",
+	      modelUsed: "gemini-2.5-flash",
+	      project,
+	      location,
+	      hasServiceAccountJson,
+	      hasApiKey,
+	      latencyMs,
+	      response: result.text || "Respuesta vacía obtenida del modelo."
+	    });
+	  } catch (err: any) {
+	    const latencyMs = Date.now() - startTime;
+	    console.error("Error en /api/test-vertex:", err);
+	    return res.status(500).json({
+	      success: false,
+	      provider: "Google Cloud Vertex AI",
+	      project,
+	      location,
+	      hasServiceAccountJson,
+	      hasApiKey,
+	      latencyMs,
+	      error: err.message || String(err),
+	      helpTip: "Verifica que en Settings > Secrets tengas GOOGLE_CLOUD_PROJECT con tu ID de proyecto de GCP (ejemplo: mis-app-258d2) y que la API de Vertex AI esté habilitada en Google Cloud Console."
+	    });
+	  }
+	});
+
+	// Función reutilizable para ejecutar la exportación ClickUp -> Google Sheets con Vertex AI
+	async function runExportClickupToSheetsJob(options: {
+	  spreadsheetId?: string;
+	  sheetName?: string;
+	  includeClosed?: boolean;
+	  googleAccessToken?: string | null;
+	  assigneeId?: string;
+	  onlyMyTasks?: boolean;
+	}) {
+	  const startTime = Date.now();
+	  const spreadsheetId = options?.spreadsheetId || "1RvYVVhdfU37FeCkgBdhfQ7xdBLDtET5XupBY_ivilDI";
+	  let sheetName = options?.sheetName || "13 de agosto";
+	  if (!sheetName || sheetName.toLowerCase() === "auto") {
+	    const dateObj = new Date();
+	    const months = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+	    sheetName = `${dateObj.getDate()} de ${months[dateObj.getMonth()]}`;
+	  }
+
+	  const includeClosed = options?.includeClosed !== false;
+	  const googleAccessToken = options?.googleAccessToken || null;
+	  const targetAssigneeId = options?.assigneeId || ID_DONNA;
+	  const onlyMyTasks = options?.onlyMyTasks !== false;
+
+	  console.log(`🚀 [ExportToSheets] Iniciando exportación ClickUp -> Google Sheet (${spreadsheetId}, hoja: "${sheetName}")`);
+
+	  // 1. Recorrer páginas de ClickUp
+	  let allTasks: any[] = [];
+	  let page = 0;
+	  let pagesCount = 0;
+
+	  let assigneeParam = "";
+	  if (onlyMyTasks) {
+	    const ids = Array.from(new Set([String(targetAssigneeId), "101113624"]));
+	    assigneeParam = ids.map(id => `&assignees[]=${encodeURIComponent(id)}`).join("");
+	  }
+
+	  while (true) {
+	    const clickupUrl = `https://api.clickup.com/api/v2/list/${CLICKUP_LIST_ID}/task?include_closed=${includeClosed}&subtasks=true&page=${page}${assigneeParam}`;
+	    const clickupRes = await fetchClickUp(clickupUrl);
+	    
+	    if (!clickupRes.ok) {
+	      const errBody = await clickupRes.text();
+	      console.warn(`⚠️ [ExportToSheets] Error al consultar página ${page} de ClickUp: ${errBody}`);
+	      break;
+	    }
+
+	    const data = await clickupRes.json() as any;
+	    const pageTasks = data.tasks || [];
+	    if (pageTasks.length === 0) {
+	      if (page === 0 && onlyMyTasks && assigneeParam !== "") {
+	        console.warn(`⚠️ [ExportToSheets] 0 tareas obtenidas con filtro de URL assignees. Reintentando consulta completa sin filtro URL...`);
+	        assigneeParam = "";
+	        continue;
+	      }
+	      break;
+	    }
+
+	    allTasks.push(...pageTasks);
+	    page++;
+	    pagesCount++;
+
+	    if (page > 150) break;
+	  }
+
+	  console.log(`📦 [ExportToSheets] Se obtuvieron ${allTasks.length} tareas en ${pagesCount} páginas.`);
+
+	  // Filtrar tareas asignadas a Donna AI o ID/email configurado, y filtrar tareas activas si no se piden cerradas
+	  const myTasks = allTasks.filter((t: any) => {
+	    // Excluir tareas cerradas si includeClosed es false
+	    const statusStr = String(t.status?.status || "").trim().toLowerCase();
+	    const isClosed = ["closed", "complete", "completed", "resuelto", "cerrado", "resolved"].includes(statusStr) || t.status?.type === "closed";
+	    if (!includeClosed && isClosed) return false;
+
+	    if (onlyMyTasks) {
+	      if (!t.assignees || !Array.isArray(t.assignees) || t.assignees.length === 0) return false;
+	      const targetStr = String(targetAssigneeId).trim().toLowerCase();
+	      return t.assignees.some((a: any) => {
+	        const aId = String(a.id || "").trim();
+	        const aEmail = String(a.email || "").trim().toLowerCase();
+	        const aUsername = String(a.username || a.name || "").trim().toLowerCase();
+
+	        if (aId === targetStr || aId === "101113624") return true;
+	        if (targetStr.includes("donna") || targetStr === "101113624") {
+	          if (aEmail.includes("donna") || aUsername.includes("donna")) return true;
+	        }
+	        if (targetStr && targetStr !== "101113624") {
+	          if (aEmail.includes(targetStr) || aUsername.includes(targetStr)) return true;
+	        }
+	        return false;
+	      });
+	    }
+	    return true;
+	  });
+
+	  console.log(`🎯 [ExportToSheets] Tareas filtradas (solo activas=${!includeClosed}, solo mis tareas=${onlyMyTasks}): ${myTasks.length} de ${allTasks.length} tareas.`);
+
+	  // Helper para extraer e formatear Custom Fields
+	  function extractCustomFieldsForSheet(customFields: any[]) {
+	    const map: Record<string, string> = {};
+	    const summaryLines: string[] = [];
+
+	    for (const cf of customFields || []) {
+	      if (cf.value === undefined || cf.value === null || cf.value === "") continue;
+	      let val = "";
+	      if (cf.type_config?.options && Array.isArray(cf.type_config.options)) {
+	        const opts = cf.type_config.options;
+	        if (typeof cf.value === "string") {
+	          const m = opts.find((o: any) => o.id === cf.value || o.name === cf.value);
+	          val = m ? m.name : cf.value;
+	        } else if (typeof cf.value === "number") {
+	          const m = opts.find((o: any) => o.orderindex === cf.value || o.id === cf.value);
+	          val = m ? m.name : String(cf.value);
+	        } else if (Array.isArray(cf.value)) {
+	          val = cf.value.map((v: any) => {
+	            const m = opts.find((o: any) => o.id === v || o.orderindex === v);
+	            return m ? m.name : String(v);
+	          }).join(", ");
+	        }
+	      } else if (cf.type === "date" && (typeof cf.value === "string" || typeof cf.value === "number")) {
+	        val = new Date(parseInt(String(cf.value))).toLocaleDateString("es-MX");
+	      } else if (typeof cf.value === "object" && cf.value !== null) {
+	        val = cf.value.name || cf.value.text || cf.value.url || JSON.stringify(cf.value);
+	      } else {
+	        val = String(cf.value);
+	      }
+
+	      if (val && val.trim()) {
+	        const fName = (cf.name || cf.id).trim();
+	        const cleanVal = val.trim();
+	        map[fName] = cleanVal;
+	        summaryLines.push(`${fName}: ${cleanVal}`);
+	      }
+	    }
+
+	    return {
+	      map,
+	      summary: summaryLines.length > 0 ? summaryLines.join(" | ") : "Sin campos personalizados"
+	    };
+	  }
+
+	  // Helper para formatear comentarios principales y respuestas en hilo
+	  function formatTaskCommentsFull(commentsList: any[]): { fullFormattedText: string; totalCount: number; aiFormattedText: string } {
+	    let totalCount = 0;
+	    const blocks: string[] = [];
+	    const aiLines: string[] = [];
+
+	    for (const c of commentsList || []) {
+	      totalCount++;
+	      const author = c.user?.username || c.user?.email || "Usuario / Bot";
+	      const dateStr = c.date ? new Date(parseInt(c.date)).toLocaleString("es-MX") : "";
+	      const text = censurarIntentosFallidos((c.comment_text || "").trim());
+
+	      let block = `[${dateStr ? dateStr + " - " : ""}${author}]:\n${text}`;
+	      aiLines.push(`[${author}]: ${text}`);
+
+	      if (Array.isArray(c.replies) && c.replies.length > 0) {
+	        for (const r of c.replies) {
+	          totalCount++;
+	          const rAuthor = r.user?.username || r.user?.email || "Usuario / Bot";
+	          const rDateStr = r.date ? new Date(parseInt(r.date)).toLocaleString("es-MX") : "";
+	          const rText = censurarIntentosFallidos((r.comment_text || "").trim());
+
+	          block += `\n\n  ↳ [RESPUESTA ${rDateStr ? "(" + rDateStr + ") " : ""}- ${rAuthor}]:\n  ${rText.replace(/\n/g, "\n  ")}`;
+	          aiLines.push(`  ↳ [Respuesta de ${rAuthor}]: ${rText}`);
+	        }
+	      }
+	      blocks.push(block);
+	    }
+
+	    return {
+	      fullFormattedText: blocks.length > 0 ? blocks.join("\n\n----------------------------------------\n\n") : "Sin comentarios registrados",
+	      totalCount,
+	      aiFormattedText: aiLines.join("\n")
+	    };
+	  }
+
+	  // Helper con timeout para evitar estancamientos en peticiones individuales
+	  const fetchWithTimeout = async (url: string, options: any = {}, timeoutMs = 5000) => {
+	    const controller = new AbortController();
+	    const timer = setTimeout(() => controller.abort(), timeoutMs);
+	    try {
+	      const res = await fetch(url, { ...options, signal: controller.signal });
+	      return res;
+	    } finally {
+	      clearTimeout(timer);
+	    }
+	  };
+
+	  // 2. Obtener comentarios y respuestas en hilo para cada tarea filtrada en lotes concurrentes de 12
+	  const batchSize = 12;
+	  for (let i = 0; i < myTasks.length; i += batchSize) {
+	    const chunk = myTasks.slice(i, i + batchSize);
+	    await Promise.all(
+	      chunk.map(async (task) => {
+	        try {
+	          const commentRes = await fetchWithTimeout(`https://api.clickup.com/api/v2/task/${task.id}/comment`, {
+	            headers: { "Authorization": getClickUpApiKey() }
+	          }, 5000);
+	          if (commentRes.ok) {
+	            const cData = await commentRes.json() as any;
+	            const rawComments = cData.comments || [];
+
+	            // Obtener respuestas para cada comentario con hilo
+	            await Promise.all(
+	              rawComments.map(async (c: any) => {
+	                if (c.reply_count && c.reply_count > 0) {
+	                  try {
+	                    const rRes = await fetchWithTimeout(`https://api.clickup.com/api/v2/comment/${c.id}/reply`, {
+	                      headers: { "Authorization": getClickUpApiKey() }
+	                    }, 4000);
+	                    if (rRes.ok) {
+	                      const rData = await rRes.json() as any;
+	                      c.replies = rData.comments || [];
+	                    } else {
+	                      c.replies = [];
+	                    }
+	                  } catch {
+	                    c.replies = [];
+	                  }
+	                } else {
+	                  c.replies = [];
+	                }
+	              })
+	            );
+	            task.commentsList = rawComments;
+	          } else {
+	            task.commentsList = [];
+	          }
+	        } catch {
+	          task.commentsList = [];
+	        }
+	      })
+	    );
+	  }
+
+	  // 3. Procesar resúmenes con Vertex AI (Gemini 2.5 Flash) para tareas con comentarios en lotes de 10
+	  let summariesProcessed = 0;
+	  const aiChunkSize = 10;
+	  for (let i = 0; i < myTasks.length; i += aiChunkSize) {
+	    const chunk = myTasks.slice(i, i + aiChunkSize);
+	    await Promise.all(
+	      chunk.map(async (task) => {
+	        const formattedComments = formatTaskCommentsFull(task.commentsList);
+	        task.formattedCommentsData = formattedComments;
+
+	        if (task.commentsList && task.commentsList.length > 0) {
+	          try {
+	            const prompt = `Analiza la siguiente tarea de atención al cliente en ClickUp:\n` +
+	              `Nombre: ${task.name || 'Sin título'}\n` +
+	              `Descripción: ${(task.description || '').substring(0, 300)}\n` +
+	              `Comentarios y respuestas en hilo registrados:\n${formattedComments.aiFormattedText.substring(0, 3500)}\n\n` +
+	              `Instrucciones: Genera una síntesis ejecutiva de 1 o 2 oraciones en español explicando la resolución o estado actual de este caso considerando los comentarios principales y sus respuestas en hilo.`;
+
+	            const client = getVertexClient();
+	            const aiPromise = client.models.generateContent({
+	              model: "gemini-2.5-flash",
+	              contents: prompt,
+	              config: { temperature: 0.1 }
+	            });
+
+	            // Timeout de 6s para llamada a Vertex AI
+	            const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout Vertex AI")), 6000));
+	            const aiRes = await Promise.race([aiPromise, timeoutPromise]) as any;
+
+	            task.vertexSummary = (aiRes.text || "").trim();
+	            summariesProcessed++;
+	          } catch (err: any) {
+	            task.vertexSummary = `Sintetizado parcialmente: ${formattedComments.aiFormattedText.substring(0, 150)}`;
+	          }
+	        } else {
+	          task.vertexSummary = "Sin comentarios registrados en ClickUp";
+	        }
+	      })
+	    );
+	  }
+
+	  // 4. Autenticación con Google Sheets
+	  let authClient: any;
+	  if (googleAccessToken) {
+	    const oauth2Client = new google.auth.OAuth2();
+	    oauth2Client.setCredentials({ access_token: googleAccessToken });
+	    authClient = oauth2Client;
+	  } else if (process.env.GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+	    try {
+	      const jsonString = process.env.GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
+	      const creds = JSON.parse(jsonString.trim());
+	      authClient = new google.auth.GoogleAuth({
+	        credentials: creds,
+	        scopes: [
+	          "https://www.googleapis.com/auth/spreadsheets",
+	          "https://www.googleapis.com/auth/drive.file"
+	        ]
+	      });
+	    } catch (jsonErr: any) {
+	      authClient = new google.auth.GoogleAuth({
+	        scopes: [
+	          "https://www.googleapis.com/auth/spreadsheets",
+	          "https://www.googleapis.com/auth/drive.file"
+	        ]
+	      });
+	    }
+	  } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS && fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS)) {
+	    authClient = new google.auth.GoogleAuth({
+	      keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+	      scopes: [
+	        "https://www.googleapis.com/auth/spreadsheets",
+	        "https://www.googleapis.com/auth/drive.file"
+	      ]
+	    });
+	  } else {
+	    authClient = new google.auth.GoogleAuth({
+	      scopes: [
+	        "https://www.googleapis.com/auth/spreadsheets",
+	        "https://www.googleapis.com/auth/drive.file"
+	      ]
+	    });
+	  }
+
+	  const sheets = google.sheets({ version: "v4", auth: authClient });
+
+	  // 5. Verificar si existe la pestaña/hoja con el nombre `sheetName`
+	  let sheetExists = false;
+	  try {
+	    const spreadsheetMeta = await sheets.spreadsheets.get({ spreadsheetId });
+	    const existingSheets = spreadsheetMeta.data.sheets || [];
+	    sheetExists = existingSheets.some(
+	      (s) => s.properties?.title?.toLowerCase() === sheetName.toLowerCase()
+	    );
+	  } catch (metaErr: any) {
+	    console.warn("⚠️ No se pudo consultar metadata del Spreadsheet, se intentará escribir directamente:", metaErr.message);
+	  }
+
+	  if (!sheetExists) {
+	    try {
+	      console.log(`📄 [ExportToSheets] Creando nueva hoja "${sheetName}" en el libro...`);
+	      await sheets.spreadsheets.batchUpdate({
+	        spreadsheetId,
+	        requestBody: {
+	          requests: [
+	            {
+	              addSheet: {
+	                properties: {
+	                  title: sheetName
+	                }
+	              }
+	            }
+	          ]
+	        }
+	      });
+	    } catch (addSheetErr: any) {
+	      console.warn("⚠️ Creación de hoja omitida o ya existente:", addSheetErr.message);
+	    }
+	  }
+
+	  // 6. Formatear los datos para las filas
+	  const headerRow = [
+	    "ID Tarea",
+	    "Nombre Tarea",
+	    "Estado",
+	    "Asignados",
+	    "Fecha Creación",
+	    "Última Actualización",
+	    "Monto USD",
+	    "Razón / Motivo",
+	    "Tienda / Localización",
+	    "Resolución",
+	    "Fecha Venta / Contacto",
+	    "Campos Personalizados (Detalle Completo)",
+	    "Total Comentarios",
+	    "Síntesis Vertex AI",
+	    "Comentarios y Respuestas (Compañeros + Brain)",
+	    "Enlace ClickUp"
+	  ];
+
+	  const valuesRows: any[][] = [headerRow];
+
+	  for (const task of myTasks) {
+	    const assignees = (task.assignees || []).map((a: any) => a.username || a.email).join(", ") || "Sin asignar";
+	    const createdDate = task.date_created ? new Date(parseInt(task.date_created)).toLocaleString("es-MX") : "";
+	    const updatedDate = task.date_updated ? new Date(parseInt(task.date_updated)).toLocaleString("es-MX") : "";
+	    
+	    const formatted = task.formattedCommentsData || formatTaskCommentsFull(task.commentsList);
+	    const totalComments = formatted.totalCount;
+	    const commentsCellContent = formatted.fullFormattedText;
+
+	    const cfParsed = extractCustomFieldsForSheet(task.custom_fields);
+	    const amountUsd = cfParsed.map["Amount usd"] || cfParsed.map["Monto USD"] || cfParsed.map["Monto"] || "-";
+	    const reason = cfParsed.map["Reason"] || cfParsed.map["Razón"] || cfParsed.map["Motivo"] || "-";
+	    const store = cfParsed.map["Store / Location / Class"] || cfParsed.map["Tienda"] || "-";
+	    const resolution = cfParsed.map["RESOLUTION"] || cfParsed.map["Resolución"] || "-";
+	    const saleDate = cfParsed.map["Sale Date"] || cfParsed.map["Fecha de Venta"] || cfParsed.map["Contact date"] || "-";
+	    const fullCfSummary = cfParsed.summary;
+
+	    valuesRows.push([
+	      task.id,
+	      task.name || "",
+	      task.status?.status || "",
+	      assignees,
+	      createdDate,
+	      updatedDate,
+	      amountUsd,
+	      reason,
+	      store,
+	      resolution,
+	      saleDate,
+	      fullCfSummary,
+	      totalComments.toString(),
+	      task.vertexSummary || "",
+	      commentsCellContent,
+	      task.url || `https://app.clickup.com/t/${task.id}`
+	    ]);
+	  }
+
+	  // Clear previous content in sheet and write new data
+	  try {
+	    await sheets.spreadsheets.values.clear({
+	      spreadsheetId,
+	      range: `'${sheetName}'!A1:Z10000`
+	    });
+	  } catch {}
+
+	  await sheets.spreadsheets.values.update({
+	    spreadsheetId,
+	    range: `'${sheetName}'!A1`,
+	    valueInputOption: "USER_ENTERED",
+	    requestBody: {
+	      values: valuesRows
+	    }
+	  });
+
+	  const elapsedMs = Date.now() - startTime;
+	  console.log(`✅ [ExportToSheets] Exportación finalizada con éxito en ${elapsedMs}ms!`);
+
+	  return {
+	    success: true,
+	    spreadsheetId,
+	    sheetName,
+	    tasksCount: myTasks.length,
+	    totalListTasks: allTasks.length,
+	    targetAssigneeId,
+	    pagesCount,
+	    summariesCount: summariesProcessed,
+	    rowsCount: valuesRows.length,
+	    latencyMs: elapsedMs,
+	    timestamp: new Date().toISOString()
+	  };
+	}
+
+	// Endpoint de Exportación Manual
+	app.post("/api/export-clickup-sheets", async (req, res) => {
+	  try {
+	    const result = await runExportClickupToSheetsJob(req.body);
+	    return res.json(result);
+	  } catch (err: any) {
+	    console.error("❌ Error en /api/export-clickup-sheets:", err);
+	    return res.status(500).json({
+	      success: false,
+	      error: err.message || String(err),
+	      helpTip: "Asegúrate de que la hoja de cálculo esté compartida con permisos de edición para la Service Account (vertex-ai@mis-app-258d2.iam.gserviceaccount.com) o que hayas iniciado sesión con tu cuenta de Google."
+	    });
+	  }
+	});
+
+	// --- EXPORTADOR PROGRAMADO (CRON JOB AUTOMÁTICO) ---
+	const CRON_CONFIG_PATH = path.join(process.cwd(), "cron_sheets_config.json");
+
+	let cronConfig = {
+	  enabled: true,
+	  intervalHours: 3,
+	  cronExpression: "0 */3 * * *",
+	  spreadsheetId: "1RvYVVhdfU37FeCkgBdhfQ7xdBLDtET5XupBY_ivilDI",
+	  sheetName: "13 de agosto",
+	  includeClosed: true,
+	  onlyMyTasks: true,
+	  assigneeId: "101113624",
+	  lastRunTime: null as string | null,
+	  lastRunStatus: null as string | null,
+	  lastRunDetails: null as any
+	};
+
+	try {
+	  if (fs.existsSync(CRON_CONFIG_PATH)) {
+	    const raw = fs.readFileSync(CRON_CONFIG_PATH, "utf-8");
+	    cronConfig = { ...cronConfig, ...JSON.parse(raw) };
+	  }
+	  // Si el servidor reinició o despertó y el estado se había quedado en "running", restaurarlo
+	  if (cronConfig.lastRunStatus === "running") {
+	    cronConfig.lastRunStatus = cronConfig.lastRunDetails?.success ? "success" : "idle";
+	  }
+	} catch (e) {
+	  console.error("Error cargando cron_sheets_config.json:", e);
+	}
+
+	function saveCronConfig() {
+	  try {
+	    fs.writeFileSync(CRON_CONFIG_PATH, JSON.stringify(cronConfig, null, 2));
+	  } catch (e) {
+	    console.error("Error guardando cron_sheets_config.json:", e);
+	  }
+	}
+
+	// Guardar estado inicial para asegurar persistencia
+	saveCronConfig();
+
+	let activeCronTask: any = null;
+
+	function setupCronJob() {
+	  if (activeCronTask) {
+	    try { activeCronTask.stop(); } catch {}
+	    activeCronTask = null;
+	  }
+
+	  if (!cronConfig.enabled) {
+	    console.log("⏰ [CronExporter] Exportador programado actualmente DESACTIVADO.");
+	    return;
+	  }
+
+	  const expr = cronConfig.cronExpression || `0 */${cronConfig.intervalHours || 3} * * *`;
+	  if (!cron.validate(expr)) {
+	    console.error(`❌ [CronExporter] Expresión Cron no válida: ${expr}`);
+	    return;
+	  }
+
+	  console.log(`⏰ [CronExporter] Programando exportador automático con expresión "${expr}" (cada ${cronConfig.intervalHours} horas)...`);
+
+	  activeCronTask = cron.schedule(expr, async () => {
+	    console.log(`🔔 [CronExporter] Ejecutando tarea programada de exportación ClickUp -> Google Sheets...`);
+	    cronConfig.lastRunTime = new Date().toISOString();
+	    cronConfig.lastRunStatus = "running";
+	    saveCronConfig();
+
+	    try {
+	      const res = await runExportClickupToSheetsJob({
+	        spreadsheetId: cronConfig.spreadsheetId,
+	        sheetName: cronConfig.sheetName,
+	        includeClosed: cronConfig.includeClosed,
+	        onlyMyTasks: cronConfig.onlyMyTasks,
+	        assigneeId: cronConfig.assigneeId
+	      });
+
+	      cronConfig.lastRunStatus = "success";
+	      cronConfig.lastRunDetails = res;
+	      console.log(`✅ [CronExporter] Exportación programada finalizada con éxito. ${res.tasksCount} tareas exportadas.`);
+	    } catch (err: any) {
+	      cronConfig.lastRunStatus = "error";
+	      cronConfig.lastRunDetails = { error: err.message || String(err) };
+	      console.error(`❌ [CronExporter] Error en exportación programada:`, err);
+	    } finally {
+	      saveCronConfig();
+	    }
+	  });
+
+	  // Catch-up al despertar: si el contenedor estuvo suspendido y ya pasaron más horas que el intervalo, ejecutar al iniciar
+	  if (cronConfig.lastRunTime) {
+	    const lastRunMs = new Date(cronConfig.lastRunTime).getTime();
+	    const nowMs = Date.now();
+	    const intervalMs = (cronConfig.intervalHours || 3) * 60 * 60 * 1000;
+	    if (nowMs - lastRunMs > intervalMs) {
+	      console.log(`⚡ [CronExporter] El servidor estuvo inactivo más de ${cronConfig.intervalHours}h desde la última ejecución. Iniciando sincronización de puesta al día...`);
+	      setTimeout(async () => {
+	        try {
+	          cronConfig.lastRunTime = new Date().toISOString();
+	          cronConfig.lastRunStatus = "running";
+	          saveCronConfig();
+	          const res = await runExportClickupToSheetsJob({
+	            spreadsheetId: cronConfig.spreadsheetId,
+	            sheetName: cronConfig.sheetName,
+	            includeClosed: cronConfig.includeClosed,
+	            onlyMyTasks: cronConfig.onlyMyTasks,
+	            assigneeId: cronConfig.assigneeId
+	          });
+	          cronConfig.lastRunStatus = "success";
+	          cronConfig.lastRunDetails = res;
+	          saveCronConfig();
+	          console.log(`✅ [CronExporter] Sincronización de puesta al día completada.`);
+	        } catch (e: any) {
+	          cronConfig.lastRunStatus = "error";
+	          cronConfig.lastRunDetails = { error: e.message || String(e) };
+	          saveCronConfig();
+	        }
+	      }, 3000);
+	    }
+	  }
+	}
+
+	// Inicializar Cron en el arranque
+	setupCronJob();
+
+	app.get("/api/cron/sheets-status", (req, res) => {
+	  return res.json({
+	    cronConfig,
+	    isTaskActive: !!activeCronTask
+	  });
+	});
+
+	app.post("/api/cron/sheets-config", (req, res) => {
+	  try {
+	    const { enabled, intervalHours, spreadsheetId, sheetName, includeClosed, onlyMyTasks, assigneeId } = req.body || {};
+	    
+	    if (typeof enabled === "boolean") cronConfig.enabled = enabled;
+	    if (intervalHours && !isNaN(Number(intervalHours))) {
+	      const hours = Number(intervalHours);
+	      cronConfig.intervalHours = hours;
+	      if (hours === 1) cronConfig.cronExpression = "0 * * * *";
+	      else if (hours === 24) cronConfig.cronExpression = "0 8 * * *";
+	      else cronConfig.cronExpression = `0 */${hours} * * *`;
+	    }
+	    if (spreadsheetId) cronConfig.spreadsheetId = spreadsheetId;
+	    if (sheetName) cronConfig.sheetName = sheetName;
+	    if (typeof includeClosed === "boolean") cronConfig.includeClosed = includeClosed;
+	    if (typeof onlyMyTasks === "boolean") cronConfig.onlyMyTasks = onlyMyTasks;
+	    if (assigneeId) cronConfig.assigneeId = assigneeId;
+
+	    saveCronConfig();
+	    setupCronJob();
+
+	    return res.json({
+	      success: true,
+	      cronConfig,
+	      message: cronConfig.enabled
+	        ? `Exportación programada activada cada ${cronConfig.intervalHours} hora(s)`
+	        : "Exportación programada desactivada"
+	    });
+	  } catch (err: any) {
+	    return res.status(500).json({ success: false, error: err.message });
+	  }
+	});
+
+	app.post("/api/cron/sheets-trigger", async (req, res) => {
+	  console.log("⚡ [CronExporter] Disparando ejecución manual inmediata...");
+	  cronConfig.lastRunTime = new Date().toISOString();
+	  cronConfig.lastRunStatus = "running";
+	  saveCronConfig();
+
+	  try {
+	    const result = await runExportClickupToSheetsJob({
+	      spreadsheetId: cronConfig.spreadsheetId,
+	      sheetName: cronConfig.sheetName,
+	      includeClosed: cronConfig.includeClosed,
+	      onlyMyTasks: cronConfig.onlyMyTasks,
+	      assigneeId: cronConfig.assigneeId
+	    });
+
+	    cronConfig.lastRunStatus = "success";
+	    cronConfig.lastRunDetails = result;
+	    saveCronConfig();
+
+	    return res.json({
+	      success: true,
+	      message: "Tarea ejecutada inmediatamente en segundo plano con éxito",
+	      result
+	    });
+	  } catch (err: any) {
+	    cronConfig.lastRunStatus = "error";
+	    cronConfig.lastRunDetails = { error: err.message || String(err) };
+	    saveCronConfig();
+	    return res.status(500).json({ success: false, error: err.message });
+	  }
 	});
 
 	app.get("/api/sharefile/config", async (req, res) => {
@@ -2880,6 +4175,114 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  }
 	});
 
+	// Endpoint to directly update a user and/or ticket in Zendesk
+	app.all(["/api/zendesk/update-user", "/zendesk/update-user"], async (req, res) => {
+	  try {
+	    const params = req.method === "GET" ? req.query : req.body;
+	    const { user_id, task_id, phone, external_id, email, name, ticket_id, notes } = params || {};
+	    
+	    if (!user_id && !task_id && !ticket_id && !email && !phone && !external_id) {
+	      return res.status(400).json({ 
+	        success: false, 
+	        error: "Debes proporcionar al menos un identificador (user_id, task_id, ticket_id, email, phone o external_id) para actualizar en Zendesk." 
+	      });
+	    }
+
+	    const result = await syncZendeskUserAndTicket({
+	      userId: user_id,
+	      taskId: task_id,
+	      zendeskTicketId: ticket_id,
+	      phone,
+	      externalId: external_id,
+	      email,
+	      name,
+	      notes
+	    });
+
+	    const resolvedEmail = email || (result as any).email || "";
+	    const resolvedPhone = phone || (result as any).phone || "";
+	    const resolvedTicketId = ticket_id || (result as any).ticket_id || "";
+	    const resolvedExtId = external_id || (result as any).external_id || "";
+	    const resolvedName = name || (result as any).name || "";
+
+	    // Also update local caches if task_id provided
+	    if (task_id) {
+	      if (resolvedPhone) await guardarPhone(task_id, resolvedPhone);
+	      if (resolvedEmail) await guardarEmail(task_id, resolvedEmail);
+	      if (resolvedTicketId) await guardarZendeskTicketId(task_id, resolvedTicketId);
+	    }
+
+	    res.json({
+	      success: result.success,
+	      user_updated: result.user_updated,
+	      ticket_updated: result.ticket_updated,
+	      user_id: result.user_id,
+	      email: resolvedEmail,
+	      phone: resolvedPhone,
+	      external_id: resolvedExtId,
+	      name: resolvedName,
+	      ticket_id: resolvedTicketId,
+	      message: result.details || "Usuario de Zendesk actualizado correctamente.",
+	      details: result.details
+	    });
+	  } catch (err: any) {
+	    console.error("Error in /api/zendesk/update-user:", err);
+	    res.status(500).json({ success: false, error: err.message });
+	  }
+	});
+
+	// Dedicated endpoint to synchronize client info directly from Zendesk
+	app.all(["/api/zendesk/sync-client", "/zendesk/sync-client"], async (req, res) => {
+	  try {
+	    const params = req.method === "GET" ? req.query : req.body;
+	    const { task_id, zendesk_ticket_id, external_id, phone, email, name } = params || {};
+
+	    if (!task_id && !zendesk_ticket_id && !external_id && !phone && !email) {
+	      return res.status(400).json({
+	        success: false,
+	        error: "Debes proporcionar al menos un identificador (task_id, zendesk_ticket_id, external_id, phone o email) para sincronizar con Zendesk."
+	      });
+	    }
+
+	    const result = await syncZendeskUserAndTicket({
+	      taskId: task_id,
+	      zendeskTicketId: zendesk_ticket_id,
+	      externalId: external_id,
+	      phone,
+	      email,
+	      name
+	    });
+
+	    const resolvedEmail = email || (result as any).email || "";
+	    const resolvedPhone = phone || (result as any).phone || "";
+	    const resolvedTicketId = zendesk_ticket_id || (result as any).ticket_id || "";
+	    const resolvedExtId = external_id || (result as any).external_id || "";
+	    const resolvedName = name || (result as any).name || "";
+
+	    if (task_id) {
+	      if (resolvedEmail) await guardarEmail(task_id, resolvedEmail);
+	      if (resolvedPhone) await guardarPhone(task_id, resolvedPhone);
+	      if (resolvedTicketId) await guardarZendeskTicketId(task_id, resolvedTicketId);
+	    }
+
+	    return res.json({
+	      success: result.success,
+	      user_updated: result.user_updated,
+	      ticket_updated: result.ticket_updated,
+	      user_id: result.user_id,
+	      email: resolvedEmail,
+	      phone: resolvedPhone,
+	      external_id: resolvedExtId,
+	      name: resolvedName,
+	      ticket_id: resolvedTicketId,
+	      message: result.details || "Datos de Zendesk sincronizados correctamente."
+	    });
+	  } catch (err: any) {
+	    console.error("Error in /api/zendesk/sync-client:", err);
+	    return res.status(500).json({ success: false, error: err.message });
+	  }
+	});
+
 	// Robust Groq OCR endpoint
 	app.post("/api/ocr", async (req, res) => {
 	  try {
@@ -3196,7 +4599,16 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	// Metrics
 	app.get("/api/metrics", async (req, res) => {
 	  try {
-		const tasks = await fetchAllActiveTasks();
+		const allTasks = await fetchAllActiveTasks();
+		const tasks = allTasks.filter((t: any) => {
+		  if (!t.assignees || !Array.isArray(t.assignees) || t.assignees.length === 0) return false;
+		  return t.assignees.some((a: any) => 
+		    String(a.id) === String(ID_DONNA) || 
+		    String(a.id) === "101113624" ||
+		    String(a.email || "").toLowerCase().includes("donna") || 
+		    String(a.username || a.name || "").toLowerCase().includes("donna")
+		  );
+		});
 		const phonesMap = await obtenerPhones();
 		
 		const stateCounts: Record<string, number> = {};
@@ -3631,7 +5043,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  const fieldId = req.query.field_id as string;
 	  const url = `https://api.clickup.com/api/v2/list/${CLICKUP_LIST_ID}/field`;
 	  try {
-		const response = await fetch(url, { headers: { "Authorization": CLICKUP_API_KEY } });
+		const response = await fetch(url, { headers: { "Authorization": getClickUpApiKey() } });
 		if (!response.ok) {
 		  return res.status(400).json({ error: "Error obteniendo campos de ClickUp" });
 		}
@@ -3712,21 +5124,26 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 
 		if (!target && suggestions.length === 0) {
 		  const resumenTareas = myTasks.map((t: any) => `- ${t.name} (ID: ${t.id}) | Estatus: ${t.status?.status.toUpperCase()}`).join("\n");
+		  const manualFiltrado = filtrarManualRelevante(query, manual);
 
-		  const promptGlobal = `Eres Donna, la asistente ejecutiva de inteligencia artificial. El usuario no buscó un ticket en específico, sino que está platicando contigo.
+		  const promptGlobal = `Eres Donna, la asistente ejecutiva y experta operativa de Morena Mía Beauty Group. El usuario no buscó un ticket en específico, sino que te está haciendo una consulta o platicando contigo.
 				
 				CONSULTA DEL USUARIO: ${query}
+				
+				MANUAL OPERATIVO Y BASE DE CONOCIMIENTO DE LA EMPRESA:
+				${manualFiltrado || JSON.stringify(manual, null, 2)}
 				
 				INVENTARIO ACTUAL DE TODAS TUS TAREAS ACTIVAS:
 				${resumenTareas ? resumenTareas : "No hay tareas asignadas actualmente."}
 				
 				INSTRUCCIONES:
-				1. Actúa como una IA conversacional súper inteligente (estilo ChatGPT o Claude). Sé amigable y profesional.
-				2. Si el usuario te pide un resumen de los estatus, cuéntale cuántas tareas tienes y en qué estatus están basándote en tu Inventario.
-				3. Si hace una pregunta general o te saluda, platica con él de forma natural.
-				4. Si te pregunta por *comentarios específicos* de todas las tareas a la vez, explícale amablemente que, por seguridad de memoria, necesitas que te diga el nombre o ID de una tarea en específico para sumergirte en ese historial.`;
+				1. Actúa como una IA conversacional súper inteligente, resolutiva, amigable y profesional.
+				2. Si el usuario te pregunta sobre procedimientos operativos, políticas de reembolso, Give Back (GBK), datos de contacto oficiales de servicios/partners (como Give Back: Teléfono +1 (202) 838-4850, Email care@givebackmytaxrefund.com), Shalem, envíos FedEx, o reglas de atención, responde con la información exacta de tu manual operativo.
+				3. Si el usuario te pide un resumen de los estatus de tareas, cuéntale cuántas tareas tienes y en qué estatus están basándote en tu Inventario.
+				4. Si hace una pregunta general o te saluda, platica con él de forma natural y cálida.
+				5. Si te pregunta por *comentarios específicos* de todas las tareas a la vez, explícale amablemente que necesitas el nombre o ID de la tarea en específico para ver su historial completo.`;
 
-		  const answer = await callGroq(promptGlobal, "Eres una asistente conversacional de alto nivel. Puedes dar reportes generales del inventario de tareas.", 0.4);
+		  const answer = await callGroq(promptGlobal, "Eres Donna, asistente ejecutiva y experta operativa de Morena Mía Beauty Group. Conoces a la perfección las políticas, contactos y procedimientos.", 0.4);
 		  const elapsed = (Date.now() - startTime) / 1000;
 		  logMetric("ai_search_global", elapsed, { query });
 		  return res.json({ found: false, answer, task_url: null, source_file: sourceFilename });
@@ -3743,7 +5160,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 
 		let comentariosCompletos = hilo;
 		try {
-		  const resC = await fetch(`https://api.clickup.com/api/v2/task/${target.id}/comment`, { headers: { "Authorization": CLICKUP_API_KEY } });
+		  const resC = await fetch(`https://api.clickup.com/api/v2/task/${target.id}/comment`, { headers: { "Authorization": getClickUpApiKey() } });
 		  if (resC.ok) {
 			const dataC = await resC.json() as any;
 			const allComments = dataC.comments || [];
@@ -3921,10 +5338,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		  customFields.push({ id: ID_CF_REASON, value: reasonUuid });
 		}
 
-		const autoResolutionId = determineResolution(reason, initial_comment || "");
-		if (autoResolutionId) {
-		  customFields.push({ id: "55638270-b614-4783-ad1c-0bd994d6484b", value: autoResolutionId });
-		}
+		// Resolution must remain blank when creating a new ticket (not resolved yet)
 
 		if (sale_date) {
 		  try {
@@ -4062,6 +5476,11 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		  await guardarPhone(taskId, phone);
 		}
 
+		// Save task email if any
+		if (email) {
+		  await guardarEmail(taskId, email.trim());
+		}
+
 		// Post translated comment
 		  const finalCommentText = translated;
 		  await fetch(`https://api.clickup.com/api/v2/task/${taskId}/comment`, {
@@ -4075,8 +5494,103 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		const manualZendeskId = zendesk_ticket_id ? String(zendesk_ticket_id).trim() : null;
 
 		if (manualZendeskId) {
-		  console.log(`[Process Zendesk Case] Manual Zendesk Ticket ID provided: ${manualZendeskId}`);
-		  zendeskResult = { id: manualZendeskId };
+		  const cleanTicketId = manualZendeskId.replace(/[^\d]/g, "") || manualZendeskId;
+		  console.log(`[Process Zendesk Case] Manual Zendesk Ticket ID provided: ${cleanTicketId}`);
+		  zendeskResult = { id: cleanTicketId };
+
+		  // Automatically update Zendesk user (phone, external_id / invoice, notes) for this linked ticket
+		  try {
+			const cleanEmail = email ? email.trim() : "";
+			const cleanPhone = phone ? phone.trim() : "";
+			const cleanInvoice = invoice ? String(invoice).trim() : "";
+			const cleanStore = store_location || "N/A";
+			const cleanRegion = region_id || "N/A";
+			const cleanComment = initial_comment || "";
+
+			let targetUserId: any = null;
+
+			// 1. Fetch ticket from Zendesk to obtain requester_id
+			try {
+			  const zdTicketRes = await zendeskFetch(`/tickets/${cleanTicketId}.json`);
+			  if (zdTicketRes?.ticket) {
+				zendeskResult = zdTicketRes.ticket;
+				if (zdTicketRes.ticket.requester_id) {
+				  targetUserId = zdTicketRes.ticket.requester_id;
+				  console.log(`[Process Zendesk Case] Found requester_id ${targetUserId} for linked ticket ${cleanTicketId}`);
+				}
+			  }
+			} catch (tErr: any) {
+			  console.warn(`[Process Zendesk Case] Could not fetch ticket ${cleanTicketId}:`, tErr.message);
+			}
+
+			// 2. If requester_id not found via ticket, lookup user by email
+			if (!targetUserId && cleanEmail) {
+			  try {
+				const u = await findUserByEmail("", cleanEmail);
+				if (u && u.id) {
+				  targetUserId = u.id;
+				  console.log(`[Process Zendesk Case] Found user ID ${targetUserId} via email ${cleanEmail}`);
+				}
+			  } catch (uErr: any) {
+				console.warn(`[Process Zendesk Case] User search by email failed:`, uErr.message);
+			  }
+			}
+
+			// 3. Update User profile in Zendesk (phone, external_id / invoice, name, notes)
+			if (targetUserId) {
+			  console.log(`🚀 [Process Zendesk Case] Updating Zendesk user ${targetUserId} (Phone: ${cleanPhone || "N/A"}, External ID / Invoice: ${cleanInvoice || "N/A"})...`);
+			  const userUpdatePayload: any = {};
+			  if (cleanPhone) userUpdatePayload.phone = cleanPhone;
+			  if (cleanInvoice) userUpdatePayload.external_id = cleanInvoice;
+			  if (name && name.trim()) userUpdatePayload.name = name.trim();
+
+			  try {
+				const existingUserRes = await zendeskFetch(`/users/${targetUserId}.json`).catch(() => null);
+				const prevNotes = existingUserRes?.user?.notes || "";
+				const newNote = `Store: ${cleanStore}\nRegion: ${cleanRegion}${cleanComment ? `\nComment: ${cleanComment}` : ""}`;
+				userUpdatePayload.notes = prevNotes ? `${prevNotes}\n---\n${newNote}` : newNote;
+
+				await zendeskFetch(`/users/${targetUserId}.json`, {
+				  method: "PUT",
+				  body: { user: userUpdatePayload }
+				});
+				console.log(`✅ [Process Zendesk Case] User ${targetUserId} updated successfully in Zendesk.`);
+			  } catch (uUpdateErr: any) {
+				console.warn(`⚠️ [Process Zendesk Case] Primary user update had warning, retrying with core fields:`, uUpdateErr.message);
+				try {
+				  const corePayload: any = {};
+				  if (cleanPhone) corePayload.phone = cleanPhone;
+				  if (cleanInvoice) corePayload.external_id = cleanInvoice;
+				  await zendeskFetch(`/users/${targetUserId}.json`, {
+					method: "PUT",
+					body: { user: corePayload }
+				  });
+				  console.log(`✅ [Process Zendesk Case] User ${targetUserId} updated with core phone & external_id in Zendesk.`);
+				} catch (coreErr: any) {
+				  console.warn(`⚠️ [Process Zendesk Case] Core user update error:`, coreErr.message);
+				}
+			  }
+			}
+
+			// 4. Update the ticket external_id in Zendesk as well
+			if (cleanInvoice) {
+			  try {
+				await zendeskFetch(`/tickets/${cleanTicketId}.json`, {
+				  method: "PUT",
+				  body: {
+					ticket: {
+					  external_id: cleanInvoice
+					}
+				  }
+				});
+				console.log(`✅ [Process Zendesk Case] Ticket ${cleanTicketId} updated with external_id ${cleanInvoice} in Zendesk.`);
+			  } catch (ticketUpdErr: any) {
+				console.warn(`[Process Zendesk Case] Could not update ticket external_id:`, ticketUpdErr.message);
+			  }
+			}
+		  } catch (syncErr: any) {
+			console.warn(`[Process Zendesk Case] Error syncing existing Zendesk ticket/user:`, syncErr.message);
+		  }
 		} else if (email && create_zendesk) {
 		  try {
 			const zapierToken = zapier_token || process.env.ZAPIER_MCP_TOKEN || "";
@@ -4101,6 +5615,28 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 			if (existingTicket) {
 			  console.log(`[Process Zendesk Case] El ticket de Zendesk para el invoice ${invoice} ya existe: ID ${existingTicket.id}. No crearemos duplicado.`);
 			  zendeskResult = existingTicket;
+
+			  // Update existing ticket user with phone, external_id / invoice
+			  try {
+				let targetUid = existingTicket.requester_id;
+				if (!targetUid && cleanEmail) {
+				  const u = await findUserByEmail("", cleanEmail);
+				  if (u && u.id) targetUid = u.id;
+				}
+				if (targetUid && (cleanPhone || invoice)) {
+				  const uPayload: any = {};
+				  if (cleanPhone) uPayload.phone = cleanPhone;
+				  if (invoice) uPayload.external_id = String(invoice).trim();
+				  if (name && name.trim()) uPayload.name = name.trim();
+				  await zendeskFetch(`/users/${targetUid}.json`, {
+					method: "PUT",
+					body: { user: uPayload }
+				  });
+				  console.log(`✅ [Process Zendesk Case] Existing ticket user ${targetUid} updated with phone and external_id.`);
+				}
+			  } catch (exErr: any) {
+				console.warn(`[Process Zendesk Case] Warning updating existing ticket user:`, exErr.message);
+			  }
 			} else {
 			  let existingUser: any = null;
 			  try {
@@ -4325,16 +5861,6 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		  await guardarAnsweredTime(task_id, new Date().toISOString());
 		}
 
-		if (detectIsGift(comentarioCorregido)) {
-		  // Set resolution custom field to GIFT
-		  const cfUrl = `https://api.clickup.com/api/v2/task/${task_id}/field/55638270-b614-4783-ad1c-0bd994d6484b`;
-		  await fetch(cfUrl, {
-			method: "POST",
-			headers: await getClickupHeaders(),
-			body: JSON.stringify({ value: "94dad466-99f5-4f62-b6a1-f7d0a567ffae" }) // GIFT UUID
-		  }).catch(e => console.error("Error setting GIFT resolution field:", e));
-		}
-
 		const triggersCierre = [
 		  "cerraremos esta tarea", "cerraremos este ticket", "ticket cerrado", 
 		  "cerrar ticket", "cerrar tarea", "cerramos la tarea",
@@ -4388,28 +5914,42 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 
 		let commentText = (await callGroq(promptIa, "You are a professional corporate customer service translator.")).trim();
 
-		if (detectIsDeadline(comentarioCorregido) || detectIsDeadline(commentText)) {
+		// Check if translated English output explicitly contains close triggers
+		const commentTextLower = normalizeText(commentText);
+		const esCierreEnTraduccion = triggersCierre.some(t => commentTextLower.includes(normalizeText(t)));
+		const finalEsCierre = esCierre || esCierreEnTraduccion;
+
+		if (finalEsCierre) {
+		  detectedStatus = "Closed";
+		} else if (detectIsDeadline(comentarioCorregido) || detectIsDeadline(commentText)) {
 		  detectedStatus = "deadline";
 		}
 
-		const autoResolutionId = determineResolution("", comentarioCorregido) || determineResolution("", commentText);
-		if (autoResolutionId) {
-		  console.log(`🎯 [Resolution Auto-Detect] Updating Resolution field 55638270-b614-4783-ad1c-0bd994d6484b to ${autoResolutionId} for task ${task_id}`);
-		  const cfUrl = `https://api.clickup.com/api/v2/task/${task_id}/field/55638270-b614-4783-ad1c-0bd994d6484b`;
-		  await fetch(cfUrl, {
-			method: "POST",
-			headers: await getClickupHeaders(),
-			body: JSON.stringify({ value: autoResolutionId })
-		  }).catch(e => console.error("Error setting resolution field:", e));
-
-		  if (autoResolutionId === "94dad466-99f5-4f62-b6a1-f7d0a567ffae" && !esCierre && detectedStatus !== "deadline") {
-			if (["envio", "shipment", "tracking", "regalo", "gift", "guia"].some(w => msgLower.includes(w))) {
-			  detectedStatus = "shipment follow up";
+		if (finalEsCierre) {
+		  let autoResolutionId = determineResolution("", comentarioCorregido) || determineResolution("", commentText);
+		  if (!autoResolutionId) {
+			// Default resolution for closed tasks without specific resolution
+			if (commentTextLower.includes("dispute") || commentTextLower.includes("chargeback") || msgLower.includes("disputa")) {
+			  autoResolutionId = "a148c4e2-b2f3-4b6d-9cf6-6eb8255c6099"; // DISPUTE
+			} else if (commentTextLower.includes("deadline") || commentTextLower.includes("not replied") || commentTextLower.includes("did not respond") || msgLower.includes("no respondio")) {
+			  autoResolutionId = "49bb94ed-70b8-4d8f-80ae-8b4f8ab9b04e"; // LOST LEAD
+			} else {
+			  autoResolutionId = "550d1479-412d-45f9-b7da-64cd69473af1"; // RESOLVED
 			}
+		  }
+
+		  if (autoResolutionId) {
+			console.log(`🎯 [Resolution Auto-Detect on Closure] Updating Resolution field 55638270-b614-4783-ad1c-0bd994d6484b to ${autoResolutionId} for task ${task_id}`);
+			const cfUrl = `https://api.clickup.com/api/v2/task/${task_id}/field/55638270-b614-4783-ad1c-0bd994d6484b`;
+			await fetch(cfUrl, {
+			  method: "POST",
+			  headers: await getClickupHeaders(),
+			  body: JSON.stringify({ value: autoResolutionId })
+			}).catch(e => console.error("Error setting resolution field on closure:", e));
 		  }
 		}
 
-		if (esCierre) {
+		if (finalEsCierre && !commentText.includes("🔒 CLOSURE NOTE")) {
 		  commentText = "🔒 CLOSURE NOTE & SUMMARY:\n\n" + commentText;
 		}
 
@@ -4462,7 +6002,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		  if (!rawTicketId || ["none", "null", "undefined", "n/a", "sin ticket"].includes(rawTicketId.toLowerCase())) {
 			try {
 			  console.log(`🔍 Intentando auto-detectar ID de Ticket Zendesk desde el nombre de ClickUp para la tarea ${task_id}`);
-			  const taskRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, { headers: { "Authorization": CLICKUP_API_KEY } });
+			  const taskRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, { headers: { "Authorization": getClickUpApiKey() } });
 			  if (taskRes.ok) {
 				const taskData = await taskRes.json() as any;
 				const origName = taskData.name || "";
@@ -4565,7 +6105,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		const cfRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, {
 		  method: "PUT",
 		  headers: {
-			"Authorization": CLICKUP_API_KEY,
+			"Authorization": getClickUpApiKey(),
 			"Content-Type": "application/json"
 		  },
 		  body: JSON.stringify({
@@ -4589,7 +6129,7 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		  let rawTicketId = (zendesk_ticket_id || zendeskMap[task_id] || "").toString().trim();
 		  
 		  if (!rawTicketId || ["none", "null", "undefined", "n/a", "sin ticket"].includes(rawTicketId.toLowerCase())) {
-			const taskRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, { headers: { "Authorization": CLICKUP_API_KEY } });
+			const taskRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, { headers: { "Authorization": getClickUpApiKey() } });
 			if (taskRes.ok) {
 			  const taskData = await taskRes.json() as any;
 			  const origName = taskData.name || "";
@@ -4665,15 +6205,27 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 	  const { task_id, spanish_comment, resolution_id, ticket_number } = req.body;
 
 	  try {
-		const promptIa = `Translate the following Spanish text exactly and professionally to English. Do not add any conversational filler or change the tone. Just translate: ${spanish_comment}`;
-		const translated = (await callGroq(promptIa, "You are a professional corporate translator. Provide only the direct English translation.")).trim();
+		const rawComment = (spanish_comment || "").trim();
+		let translated = rawComment || "Case resolved and completed.";
+
+		if (rawComment) {
+		  try {
+			const promptIa = `Translate the following Spanish text exactly and professionally to English. Do not add any conversational filler or change the tone. Just translate: ${rawComment}`;
+			const aiTranslation = await callGroq(promptIa, "You are a professional corporate translator. Provide only the direct English translation.");
+			if (aiTranslation && aiTranslation.trim().length > 0) {
+			  translated = aiTranslation.trim();
+			}
+		  } catch (transErr: any) {
+			console.warn("⚠️ [Close Task] Error translating comment with AI, using original text:", transErr.message);
+		  }
+		}
 
 		let rearrangedName = "";
 		let customerName = "CUSTOMER";
 		let storeName = "STORE NAME";
 
 		try {
-		  const taskRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, { headers: { "Authorization": CLICKUP_API_KEY } });
+		  const taskRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, { headers: { "Authorization": getClickUpApiKey() } });
 		  if (taskRes.ok) {
 			const taskData = await taskRes.json() as any;
 			const origName = taskData.name || "";
@@ -4741,35 +6293,67 @@ app.post(["/zendesk/close-with-note", "/api/zendesk/close-with-note"], async (re
 		  storeName = "VIP Cosmetics";
 		}
 
-		// 1. ClickUp ONLY receives the team closure note (NOT the public customer message)
-		await fetch(`https://api.clickup.com/api/v2/task/${task_id}/comment`, {
-		  method: "POST",
-		  headers: await getClickupHeaders(),
-		  body: JSON.stringify({ comment_text: `CLOSURE NOTE: ${translated}` })
-		});
+		// 1. ClickUp receives the team closure note
+		try {
+		  await fetch(`https://api.clickup.com/api/v2/task/${task_id}/comment`, {
+			method: "POST",
+			headers: await getClickupHeaders(),
+			body: JSON.stringify({ comment_text: `CLOSURE NOTE: ${translated}` })
+		  });
+		} catch (cErr: any) {
+		  console.warn("⚠️ [Close Task] Could not add closure comment to ClickUp:", cErr.message);
+		}
 
-		const updatePayload: any = { status: "Closed" };
+		// Update Status and Title in ClickUp
+		const updatePayload: any = { 
+		  status: "Closed" 
+		};
+		if (rearrangedName) {
+		  updatePayload.name = rearrangedName;
+		}
+
 		await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, {
 		  method: "PUT",
 		  headers: await getClickupHeaders(),
 		  body: JSON.stringify(updatePayload)
-		});
+		}).catch(e => console.error("Error closing task in ClickUp:", e));
 
+		// Update Resolution Custom Field in ClickUp
 		let targetResolutionId = resolution_id;
 		if (!targetResolutionId) {
-		  targetResolutionId = determineResolution("", spanish_comment) || determineResolution("", translated);
+		  targetResolutionId = determineResolution("", rawComment) || determineResolution("", translated);
 		}
 
+		const resolutionUuidMap: Record<string, string> = {
+		  "REFUND": "e9367f41-cb3b-42f0-b612-6528d02098dc",
+		  "GIFT": "94dad466-99f5-4f62-b6a1-f7d0a567ffae",
+		  "DISPUTE": "a148c4e2-b2f3-4b6d-9cf6-6eb8255c6099",
+		  "LOST LEAD": "49bb94ed-70b8-4d8f-80ae-8b4f8ab9b04e",
+		  "LOST_LEAD": "49bb94ed-70b8-4d8f-80ae-8b4f8ab9b04e",
+		  "P+R": "cdc84079-b6a3-4665-9161-97d8d7bac5eb",
+		  "RESOLVED": "550d1479-412d-45f9-b7da-64cd69473af1"
+		};
+
+		let mappedUuid = targetResolutionId;
 		if (targetResolutionId) {
+		  for (const [key, uuid] of Object.entries(resolutionUuidMap)) {
+			if (targetResolutionId.toUpperCase().includes(key)) {
+			  mappedUuid = uuid;
+			  break;
+			}
+		  }
+		}
+
+		if (mappedUuid) {
 		  const cfId = "55638270-b614-4783-ad1c-0bd994d6484b";
 		  await fetch(`https://api.clickup.com/api/v2/task/${task_id}/field/${cfId}`, {
 			method: "POST",
 			headers: await getClickupHeaders(),
-			body: JSON.stringify({ value: targetResolutionId })
+			body: JSON.stringify({ value: mappedUuid })
 		  }).catch(e => console.error("Error setting resolution field on close:", e));
 		}
 
-		// 2. Build PUBLIC customer message for Zendesk
+		// 2. Build customer message for Zendesk
 		const publicCustomerMessage = `Dear ${customerName},
 
 Per our previous email, this ticket will be closed since we did not receive a response to your last inquiry regarding your purchase at ${storeName}.
@@ -4787,7 +6371,7 @@ We appreciate your understanding and preference.`;
 		  if (!rawTicketId || ["none", "null", "undefined", "n/a", "sin ticket"].includes(rawTicketId.toLowerCase())) {
 			try {
 			  console.log(`🔍 Intentando auto-detectar ID de Ticket Zendesk desde el nombre de ClickUp para la tarea ${task_id}`);
-			  const taskRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, { headers: { "Authorization": CLICKUP_API_KEY } });
+			  const taskRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}`, { headers: { "Authorization": getClickUpApiKey() } });
 			  if (taskRes.ok) {
 				const taskData = await taskRes.json() as any;
 				const origName = taskData.name || "";
@@ -4814,21 +6398,19 @@ We appreciate your understanding and preference.`;
 
 		  if (cleanTicketNum) {
 			await guardarZendeskTicketId(task_id, cleanTicketNum);
-			console.log(`🚀 [Zendesk Direct API] Enviando mensaje público al cliente y cambiando ticket #${cleanTicketNum} a "solved"`);
+			console.log(`🚀 [Zendesk Direct API] Procesando cierre del ticket #${cleanTicketNum} a "solved"...`);
 			
-			// Send public message to customer in Zendesk and solve ticket
-			const publicResult = await addNoteByTicketIdRaw("", cleanTicketNum, publicCustomerMessage, true, true);
-			console.log("✅ Mensaje público enviado al cliente y ticket resuelto en Zendesk:", publicResult);
-
-			// Also attach internal work team closure note in Zendesk
-			try {
-			  await addNoteByTicketIdRaw("", cleanTicketNum, `CLOSURE NOTE: ${translated}`, false, false);
-			} catch (intErr: any) {
-			  console.log("ℹ️ Error agregando nota interna en Zendesk:", intErr.message);
+			const isLostLead = targetResolutionId && targetResolutionId.toUpperCase().includes("LOST");
+			if (isLostLead) {
+			  // Send public message to customer in Zendesk and solve ticket
+			  await addNoteByTicketIdRaw("", cleanTicketNum, publicCustomerMessage, true, true);
+			} else {
+			  // Internal note solving ticket
+			  await addNoteByTicketIdRaw("", cleanTicketNum, `CLOSURE NOTE: ${translated}`, true, false);
 			}
 
 			zendeskStatus = "success";
-			zendeskMessage = `Mensaje público enviado a ${customerName} y ticket #${cleanTicketNum} resuelto (Solved) en Zendesk.`;
+			zendeskMessage = `Ticket #${cleanTicketNum} resuelto (Solved) en Zendesk.`;
 		  }
 		} catch (zErr: any) {
 		  if (zErr.message && zErr.message.includes("closed prevents ticket update")) {
@@ -4837,8 +6419,8 @@ We appreciate your understanding and preference.`;
 			zendeskMessage = `El ticket ya se encontraba cerrado en Zendesk.`;
 		  } else {
 			zendeskStatus = "failed";
-			zendeskMessage = `Error al cambiar estado a Solved en Zendesk: ${zErr.message}`;
-			console.log("ℹ️ Zendesk auto-closure failed:", zErr.message);
+			zendeskMessage = `Error al actualizar Zendesk: ${zErr.message}`;
+			console.log("ℹ️ Zendesk auto-closure note:", zErr.message);
 		  }
 		}
 
@@ -4849,9 +6431,179 @@ We appreciate your understanding and preference.`;
 		  zendesk_message: zendeskMessage
 		});
 	  } catch (err: any) {
+		console.error("Error in /api/close-task:", err);
 		res.status(500).json({ error: err.message });
 	  }
 	});
+
+	// Official Resolution Mapping for ClickUp Custom Field 55638270-b614-4783-ad1c-0bd994d6484b
+	const KARLA_RESOLUTION_MAP: Record<string, { id: string; name: string }> = {
+	  "REFUND": { id: "e9367f41-cb3b-42f0-b612-6528d02098dc", name: "REFUND" },
+	  "REEMBOLSO": { id: "e9367f41-cb3b-42f0-b612-6528d02098dc", name: "REFUND" },
+	  "GIFT": { id: "94dad466-99f5-4f62-b6a1-f7d0a567ffae", name: "GIFT" },
+	  "REGALO": { id: "94dad466-99f5-4f62-b6a1-f7d0a567ffae", name: "GIFT" },
+	  "DISPUTE": { id: "a148c4e2-b2f3-4b6d-9cf6-6eb8255c6099", name: "DISPUTE" },
+	  "DISPUTA": { id: "a148c4e2-b2f3-4b6d-9cf6-6eb8255c6099", name: "DISPUTE" },
+	  "CHARGEBACK": { id: "a148c4e2-b2f3-4b6d-9cf6-6eb8255c6099", name: "DISPUTE" },
+	  "CONTRACARGO": { id: "a148c4e2-b2f3-4b6d-9cf6-6eb8255c6099", name: "DISPUTE" },
+	  "LOST LEAD": { id: "49bb94ed-70b8-4d8f-80ae-8b4f8ab9b04e", name: "LOST LEAD" },
+	  "LOST_LEAD": { id: "49bb94ed-70b8-4d8f-80ae-8b4f8ab9b04e", name: "LOST LEAD" },
+	  "LOSTLEAD": { id: "49bb94ed-70b8-4d8f-80ae-8b4f8ab9b04e", name: "LOST LEAD" },
+	  "CLIENTE PERDIDO": { id: "49bb94ed-70b8-4d8f-80ae-8b4f8ab9b04e", name: "LOST LEAD" },
+	  "P+R": { id: "cdc84079-b6a3-4665-9161-97d8d7bac5eb", name: "P+R" },
+	  "P + R": { id: "cdc84079-b6a3-4665-9161-97d8d7bac5eb", name: "P+R" },
+	  "P&R": { id: "cdc84079-b6a3-4665-9161-97d8d7bac5eb", name: "P+R" },
+	  "PRODUCT + REFUND": { id: "cdc84079-b6a3-4665-9161-97d8d7bac5eb", name: "P+R" },
+	  "PRODUCT AND REFUND": { id: "cdc84079-b6a3-4665-9161-97d8d7bac5eb", name: "P+R" },
+	  "PRODUCT & REFUND": { id: "cdc84079-b6a3-4665-9161-97d8d7bac5eb", name: "P+R" },
+	  "RESOLVED": { id: "550d1479-412d-45f9-b7da-64cd69473af1", name: "RESOLVED" },
+	  "SOLUCIONADO": { id: "550d1479-412d-45f9-b7da-64cd69473af1", name: "RESOLVED" },
+	  "RESUELTO": { id: "550d1479-412d-45f9-b7da-64cd69473af1", name: "RESOLVED" }
+	};
+
+	function matchTargetResolution(text: string): { id: string; name: string } | null {
+	  if (!text) return null;
+	  const norm = text.toLowerCase().trim();
+	  
+	  if (detectIsProductAndRefund(norm)) {
+	    return KARLA_RESOLUTION_MAP["P+R"];
+	  }
+	  if (norm.includes("refund") || norm.includes("reembolso")) {
+	    return KARLA_RESOLUTION_MAP["REFUND"];
+	  }
+	  if (norm.includes("gift") || norm.includes("regalo")) {
+	    return KARLA_RESOLUTION_MAP["GIFT"];
+	  }
+	  if (norm.includes("dispute") || norm.includes("disputa") || norm.includes("chargeback") || norm.includes("contracargo")) {
+	    return KARLA_RESOLUTION_MAP["DISPUTE"];
+	  }
+	  if (norm.includes("lost lead") || norm.includes("lost_lead") || norm.includes("lostlead") || norm.includes("cliente perdido")) {
+	    return KARLA_RESOLUTION_MAP["LOST LEAD"];
+	  }
+	  if (norm.includes("resolved") || norm.includes("solucionado") || norm.includes("resuelto")) {
+	    return KARLA_RESOLUTION_MAP["RESOLVED"];
+	  }
+	  return null;
+	}
+
+	function detectKarlaResolutionRequest(commentText: string, authorName: string = "", userEmail: string = ""): {
+	  isFromKarla: boolean;
+	  resolutionName: string;
+	  resolutionUuid: string;
+	  originalText: string;
+	} | null {
+	  if (!commentText || typeof commentText !== "string") return null;
+	  const norm = commentText.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+	  const authorNorm = (authorName || "").toLowerCase();
+	  const emailNorm = (userEmail || "").toLowerCase();
+	  const isFromKarla = authorNorm.includes("karla") || emailNorm.includes("karla") || norm.includes("karla:");
+
+	  // Explicit patterns specifically demanding to change or set the RESOLUTION field
+	  const triggerPatterns = [
+	    /(?:please\s+)?(?:change|fix|update|set|switch)\s+(?:the\s+)?resolution\s+(?:to|for|as)?\s*([^\n\.,]+)/i,
+	    /(?:the\s+)?resolution\s+(?:is|should\s+be|to)\s*([^\n\.,]+)/i,
+	    /(?:favor\s+de\s+|por\s+favor\s+)?(?:cambiar|corregir|poner|actualizar)\s+(?:la\s+)?resoluci[oó]n\s+(?:a|por|como)?\s*([^\n\.,]+)/i,
+	    /resoluci[oó]n\s+(?:debe\s+ser|es|a)\s*([^\n\.,]+)/i,
+	    /resolution:\s*([^\n\.,]+)/i,
+	    /resoluci[oó]n:\s*([^\n\.,]+)/i
+	  ];
+
+	  let detectedResolution: { id: string; name: string } | null = null;
+
+	  for (const pat of triggerPatterns) {
+	    const m = commentText.match(pat);
+	    if (m && m[1]) {
+	      const matched = matchTargetResolution(m[1]);
+	      if (matched) {
+	        detectedResolution = matched;
+	        break;
+	      }
+	    }
+	  }
+
+	  if (detectedResolution) {
+	    return {
+	      isFromKarla,
+	      resolutionName: detectedResolution.name,
+	      resolutionUuid: detectedResolution.id,
+	      originalText: commentText.trim()
+	    };
+	  }
+
+	  return null;
+	}
+
+	async function applyKarlaResolutionIfDetected(
+	  taskId: string, 
+	  comments: any[], 
+	  currentResolutionId?: string,
+	  autoApply: boolean = false
+	): Promise<{
+	  detected: boolean;
+	  applied: boolean;
+	  resolutionName: string;
+	  resolutionUuid: string;
+	  commentText: string;
+	  author: string;
+	} | null> {
+	  if (!taskId || !Array.isArray(comments) || comments.length === 0) return null;
+
+	  // Scan comments starting with the latest
+	  const sortedComments = [...comments].reverse();
+
+	  for (const c of sortedComments) {
+	    const cText = typeof c === "string" ? c : (c.comment_text || c.text || c.text_content || "");
+	    const authorName = typeof c === "object" ? (c.user?.username || c.user?.name || "") : "";
+	    const authorEmail = typeof c === "object" ? (c.user?.email || "") : "";
+
+	    const match = detectKarlaResolutionRequest(cText, authorName, authorEmail);
+	    if (match) {
+	      const targetUuid = match.resolutionUuid;
+	      const cfId = "55638270-b614-4783-ad1c-0bd994d6484b";
+	      const isAlreadySet = (currentResolutionId || "").trim().toLowerCase() === targetUuid.toLowerCase();
+
+	      // Only mutate ClickUp if autoApply is EXPLICITLY true (never during GET task details!)
+	      if (autoApply && !isAlreadySet) {
+	        try {
+	          console.log(`⚡ [Karla Trigger Auto-Apply] Detected instruction in comments for task ${taskId}: "${match.originalText}". Updating Resolution to ${match.resolutionName} (${targetUuid})...`);
+	          const cfUrl = `https://api.clickup.com/api/v2/task/${taskId}/field/${cfId}`;
+	          const resp = await fetch(cfUrl, {
+	            method: "POST",
+	            headers: await getClickupHeaders(),
+	            body: JSON.stringify({ value: targetUuid })
+	          });
+	          if (resp.ok) {
+	            console.log(`✅ [Karla Trigger] Successfully auto-updated task ${taskId} resolution to ${match.resolutionName}`);
+	            return {
+	              detected: true,
+	              applied: true,
+	              resolutionName: match.resolutionName,
+	              resolutionUuid: targetUuid,
+	              commentText: match.originalText,
+	              author: authorName || (match.isFromKarla ? "Karla" : "Supervisor")
+	            };
+	          } else {
+	            const errTxt = await resp.text();
+	            console.warn(`⚠️ [Karla Trigger] ClickUp API error updating resolution: ${errTxt}`);
+	          }
+	        } catch (err: any) {
+	          console.error(`⚠️ [Karla Trigger] Exception updating resolution: ${err.message}`);
+	        }
+	      }
+
+	      return {
+	        detected: true,
+	        applied: false,
+	        resolutionName: match.resolutionName,
+	        resolutionUuid: targetUuid,
+	        commentText: match.originalText,
+	        author: authorName || (match.isFromKarla ? "Karla" : "Supervisor")
+	      };
+	    }
+	  }
+
+	  return null;
+	}
 
 	// Update Resolution Custom Field in ClickUp directly
 	app.post("/api/update-resolution", async (req, res) => {
@@ -4908,12 +6660,142 @@ We appreciate your understanding and preference.`;
 	  }
 	});
 
+	// Trigger & Check Karla's resolution comments for a specific task
+	app.post("/api/check-karla-resolution", async (req, res) => {
+	  const { task_id, comment_text, author } = req.body;
+	  if (!task_id) {
+	    return res.status(400).json({ error: "task_id es requerido" });
+	  }
+
+	  try {
+	    let commentsList: any[] = [];
+	    if (comment_text) {
+	      commentsList = [{ comment_text, user: { username: author || "Karla" } }];
+	    } else {
+	      const commentsRes = await fetch(`https://api.clickup.com/api/v2/task/${task_id}/comment`, { headers: { "Authorization": getClickUpApiKey() } });
+	      if (commentsRes.ok) {
+	        const cData = await commentsRes.json() as any;
+	        commentsList = cData.comments || [];
+	      }
+	    }
+
+	    const result = await applyKarlaResolutionIfDetected(task_id, commentsList);
+	    res.json({
+	      success: true,
+	      task_id,
+	      karla_trigger: result
+	    });
+	  } catch (err: any) {
+	    console.error("Error in /api/check-karla-resolution:", err);
+	    res.status(500).json({ error: err.message });
+	  }
+	});
+
+	// ClickUp Webhook endpoint for task comments (Trigger automático en tiempo real)
+	app.post(["/api/webhook/clickup", "/api/webhook/clickup-comment", "/api/clickup/webhook"], async (req, res) => {
+	  try {
+	    const payload = req.body || {};
+	    console.log("📥 [ClickUp Webhook Received]:", JSON.stringify(payload).substring(0, 300));
+
+	    const taskId = payload.task_id || payload.taskId || (payload.history_items?.[0]?.parent_id);
+	    let commentObj = payload.comment || payload.history_items?.[0]?.comment;
+	    let commentText = "";
+	    let authorName = "";
+
+	    if (commentObj) {
+	      commentText = commentObj.comment_text || commentObj.text_content || commentObj.text || "";
+	      authorName = commentObj.user?.username || commentObj.user?.name || "";
+	    } else if (payload.history_items && payload.history_items.length > 0) {
+	      const item = payload.history_items[0];
+	      commentText = item.after || item.comment?.comment_text || "";
+	      authorName = item.user?.username || "";
+	    }
+
+	    if (taskId) {
+	      let commentsToCheck: any[] = [];
+	      if (commentText) {
+	        commentsToCheck = [{ comment_text: commentText, user: { username: authorName } }];
+	      } else {
+	        const commentsRes = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/comment`, { headers: { "Authorization": getClickUpApiKey() } });
+	        if (commentsRes.ok) {
+	          const cData = await commentsRes.json() as any;
+	          commentsToCheck = cData.comments || [];
+	        }
+	      }
+
+	      const triggerResult = await applyKarlaResolutionIfDetected(taskId, commentsToCheck);
+	      return res.json({
+	        status: "ok",
+	        message: "Webhook procesado",
+	        task_id: taskId,
+	        trigger_applied: triggerResult
+	      });
+	    }
+
+	    res.json({ status: "ok", message: "Webhook recibido sin task_id" });
+	  } catch (wErr: any) {
+	    console.error("Error processing ClickUp webhook:", wErr);
+	    res.status(500).json({ error: wErr.message });
+	  }
+	});
+
+	// Batch scan to auto-fix resolutions requested in comments by Karla
+	app.post("/api/scan-all-karla-resolutions", async (req, res) => {
+	  try {
+	    console.log("🔍 [Karla Scanner] Iniciando escaneo de tareas para detectar cambios de resolución por Karla...");
+	    const tasksRes = await fetch(`https://api.clickup.com/api/v2/list/223500803/task?include_closed=false`, {
+	      headers: { "Authorization": getClickUpApiKey() }
+	    });
+
+	    if (!tasksRes.ok) {
+	      return res.status(500).json({ error: "Error obteniendo tareas de ClickUp" });
+	    }
+
+	    const tasksData = await tasksRes.json() as any;
+	    const tasks = tasksData.tasks || [];
+	    const updatedList: any[] = [];
+
+	    for (const t of tasks) {
+	      try {
+	        const cRes = await fetch(`https://api.clickup.com/api/v2/task/${t.id}/comment`, { headers: { "Authorization": getClickUpApiKey() } });
+	        if (cRes.ok) {
+	          const cData = await cRes.json() as any;
+	          const comments = cData.comments || [];
+	          const currentResField = (t.custom_fields || []).find((f: any) => f.id === "55638270-b614-4783-ad1c-0bd994d6484b");
+	          const currentResVal = typeof currentResField?.value === "string" ? currentResField.value : "";
+	          const trigger = await applyKarlaResolutionIfDetected(t.id, comments, currentResVal);
+	          if (trigger && trigger.applied) {
+	            updatedList.push({
+	              task_id: t.id,
+	              task_name: t.name,
+	              resolution: trigger.resolutionName,
+	              comment: trigger.commentText
+	            });
+	          }
+	        }
+	      } catch (err: any) {
+	        console.warn(`Error scanning comments for task ${t.id}:`, err.message);
+	      }
+	    }
+
+	    res.json({
+	      success: true,
+	      scanned_count: tasks.length,
+	      updated_count: updatedList.length,
+	      updated_tasks: updatedList
+	    });
+	  } catch (err: any) {
+	    console.error("Error in /api/scan-all-karla-resolutions:", err);
+	    res.status(500).json({ error: err.message });
+	  }
+	});
+
 	// Get task details, phone and timezone
 	app.get("/api/task-details/:id", async (req, res) => {
 	  const { id } = req.params;
 	  try {
 		const url = `https://api.clickup.com/api/v2/task/${id}`;
-		const response = await fetch(url, { headers: { "Authorization": CLICKUP_API_KEY } });
+		const response = await fetch(url, { headers: { "Authorization": getClickUpApiKey() } });
 		if (!response.ok) {
 		  return res.status(400).json({ error: "Error fetching task details from ClickUp" });
 		}
@@ -4955,8 +6837,21 @@ We appreciate your understanding and preference.`;
 		  }
 		}
 
+		const origName = data.name || "";
+		let invoiceVal = "";
+		let clientNameVal = "";
+
+		if (origName.includes("-")) {
+		  const parts = origName.split("-");
+		  invoiceVal = parts[0].trim();
+		  clientNameVal = parts.slice(1).join("-").trim();
+		} else {
+		  const match = origName.match(/\b([A-Z0-9]{3,12})\b/i);
+		  if (match) invoiceVal = match[1];
+		  clientNameVal = origName;
+		}
+
 		if (!zendeskTicketId) {
-		  const origName = data.name || "";
 		  let parsedTicket = "";
 		  if (origName.includes("-")) {
 			parsedTicket = origName.split("-")[0].trim();
@@ -4973,13 +6868,50 @@ We appreciate your understanding and preference.`;
 		  guardarZendeskTicketId(id, zendeskTicketId.trim()).catch(() => {});
 		}
 
+		// Resolve Email
+		const emailsMap = await obtenerEmails();
+		let emailVal = emailsMap[id] || "";
+		if (!emailVal && data.description) {
+		  const emailMatch = data.description.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+		  if (emailMatch) emailVal = emailMatch[0];
+		}
+		if (!emailVal && data.custom_fields) {
+		  const emailField = (data.custom_fields || []).find((f: any) => 
+		    f.name && typeof f.name === "string" && (
+		      f.name.toLowerCase().includes("email") || 
+		      f.name.toLowerCase().includes("correo")
+		    )
+		  );
+		  if (emailField && emailField.value) {
+		    emailVal = String(emailField.value);
+		  }
+		}
+
+		// Fallback: If still no email, check Zendesk ticket requester if available
+		if (!emailVal && zendeskTicketId) {
+		  try {
+		    const zdClean = zendeskTicketId.replace(/[^\d]/g, "") || zendeskTicketId;
+		    if (zdClean) {
+		      const zdTicketData = await zendeskFetch(`/tickets/${zdClean}.json?include=users,requesters`);
+		      const rawZdUsers = Array.isArray(zdTicketData?.users) ? zdTicketData.users : [];
+		      const reqUser = rawZdUsers.find((u: any) => u.id === zdTicketData?.ticket?.requester_id) || zdTicketData?.requester;
+		      if (reqUser?.email) {
+		        emailVal = reqUser.email;
+		        guardarEmail(id, emailVal).catch(() => {});
+		      }
+		    }
+		  } catch (e: any) {}
+		}
+
 		// Fetch task comments from ClickUp
 		let commentsText: string[] = [];
+		let rawComments: any[] = [];
 		try {
-		  const commentsRes = await fetch(`https://api.clickup.com/api/v2/task/${id}/comment`, { headers: { "Authorization": CLICKUP_API_KEY } });
+		  const commentsRes = await fetch(`https://api.clickup.com/api/v2/task/${id}/comment`, { headers: { "Authorization": getClickUpApiKey() } });
 		  if (commentsRes.ok) {
 			const commentsData = await commentsRes.json() as any;
 			if (Array.isArray(commentsData.comments)) {
+			  rawComments = commentsData.comments;
 			  commentsText = commentsData.comments.map((c: any) => c.comment_text || c.text || "").filter(Boolean);
 			}
 		  }
@@ -4987,7 +6919,7 @@ We appreciate your understanding and preference.`;
 		  console.error("Error fetching comments for task details:", e);
 		}
 
-		// Resolve Resolution custom field
+		// Resolve Resolution custom field directly and authoritatively from ClickUp
 		let resolutionVal = "";
 		if (data.custom_fields && Array.isArray(data.custom_fields)) {
 		  const resField = data.custom_fields.find((f: any) => 
@@ -4998,15 +6930,31 @@ We appreciate your understanding and preference.`;
 			))
 		  );
 		  if (resField && resField.value !== undefined && resField.value !== null) {
+			const options = resField.type_config?.options || [];
 			if (typeof resField.value === "string") {
-			  resolutionVal = resField.value;
+			  // Check if string matches an option id or an option name
+			  const matchedOption = options.find((o: any) => 
+				o.id === resField.value || 
+				o.name.trim().toLowerCase() === resField.value.trim().toLowerCase()
+			  );
+			  resolutionVal = matchedOption ? matchedOption.id : resField.value;
 			} else if (typeof resField.value === "number") {
-			  // If it's a dropdown option index or object
-			  const option = (resField.type_config?.options || []).find((o: any) => o.orderindex === resField.value);
-			  if (option) resolutionVal = option.id;
-			} else if (resField.value.id) {
+			  // In ClickUp dropdown fields, value is the orderindex of the selected option
+			  const option = options.find((o: any) => o.orderindex === resField.value) || options[resField.value];
+			  if (option && option.id) resolutionVal = option.id;
+			} else if (resField.value && typeof resField.value === "object" && resField.value.id) {
 			  resolutionVal = resField.value.id;
 			}
+		  }
+		}
+
+		// Check for Karla's resolution suggestion in comments (READ ONLY: autoApply = false, NEVER mutate ClickUp and NEVER overwrite resolutionVal!)
+		let karlaTriggerInfo: any = null;
+		if (rawComments.length > 0) {
+		  try {
+		    karlaTriggerInfo = await applyKarlaResolutionIfDetected(id, rawComments, resolutionVal, false);
+		  } catch (kErr: any) {
+		    console.warn("Could not check Karla resolution in task-details:", kErr.message);
 		  }
 		}
 
@@ -5034,12 +6982,17 @@ We appreciate your understanding and preference.`;
 		res.json({
 		  id: data.id,
 		  name: data.name,
+		  client_name: clientNameVal,
 		  description: data.description,
 		  status: data.status?.status,
 		  phone,
+		  email: emailVal,
 		  timezone: tz,
+		  invoice: invoiceVal,
+		  external_id: invoiceVal,
 		  zendesk_ticket_id: zendeskTicketId,
 		  resolution_id: resolutionVal,
+		  karla_resolution_trigger: karlaTriggerInfo,
 		  reason: reasonVal,
 		  contact_date: detailedCf.contactDate,
 		  sale_date: detailedCf.saleDate,
@@ -5055,9 +7008,9 @@ We appreciate your understanding and preference.`;
 	  }
 	});
 
-	// Update client details: phone, timezone and optionally ClickUp Task ID association
+	// Update client details: phone, timezone, external_id (invoice), email and push to Zendesk + ClickUp
 	app.post("/api/update-client-info", async (req, res) => {
-	  const { task_id, phone, email, timezone, new_task_id, zendesk_ticket_id } = req.body;
+	  const { task_id, phone, email, timezone, new_task_id, zendesk_ticket_id, external_id, invoice, name } = req.body;
 	  try {
 		let activeTaskId = task_id;
 
@@ -5107,15 +7060,15 @@ We appreciate your understanding and preference.`;
 		if (email) {
 		  await guardarEmail(activeTaskId, email);
 		}
-		if (zendesk_ticket_id !== undefined) {
-		  await guardarZendeskTicketId(activeTaskId, zendesk_ticket_id.trim());
+		if (zendesk_ticket_id !== undefined && zendesk_ticket_id !== null) {
+		  await guardarZendeskTicketId(activeTaskId, String(zendesk_ticket_id).trim());
 		}
 
 		// Try to update phone & email in ClickUp custom fields
 		if (phone || email) {
 		  try {
 			const getUrl = `https://api.clickup.com/api/v2/list/${CLICKUP_LIST_ID}/field`;
-			const fResponse = await fetch(getUrl, { headers: { "Authorization": CLICKUP_API_KEY } });
+			const fResponse = await fetch(getUrl, { headers: { "Authorization": getClickUpApiKey() } });
 			if (fResponse.ok) {
 			  const fData = await fResponse.json() as any;
 			  const fields = fData.fields || [];
@@ -5160,8 +7113,51 @@ We appreciate your understanding and preference.`;
 		  }
 		}
 
-		logMetric("client_info_updated", 0.05, { task_id: activeTaskId, phone, email, timezone });
-		res.json({ status: "ok", task_id: activeTaskId });
+		// Sync User Profile (External ID / Invoice, Phone, Email, Name) & Ticket in Zendesk Direct API
+		let zdSyncResult: any = null;
+		try {
+		  zdSyncResult = await syncZendeskUserAndTicket({
+			taskId: activeTaskId,
+			zendeskTicketId: zendesk_ticket_id,
+			phone,
+			email,
+			externalId: external_id || invoice,
+			name
+		  });
+		} catch (zdErr: any) {
+		  console.warn("Zendesk sync warning in update-client-info:", zdErr.message);
+		}
+
+		// Ensure newly resolved email or phone from Zendesk is saved in local persistence
+		const resolvedEmail = email || zdSyncResult?.email || (await obtenerEmails())[activeTaskId] || "";
+		const resolvedPhone = phone || zdSyncResult?.phone || (await obtenerPhones())[activeTaskId] || "";
+		const resolvedTicketId = zendesk_ticket_id || zdSyncResult?.ticket_id || (await obtenerZendeskTicketIds())[activeTaskId] || "";
+		const resolvedExtId = external_id || invoice || zdSyncResult?.external_id || "";
+		const resolvedName = name || zdSyncResult?.name || "";
+
+		if (resolvedEmail && !email) {
+		  await guardarEmail(activeTaskId, resolvedEmail);
+		}
+		if (resolvedPhone && !phone) {
+		  await guardarPhone(activeTaskId, resolvedPhone);
+		}
+		if (resolvedTicketId && !zendesk_ticket_id) {
+		  await guardarZendeskTicketId(activeTaskId, resolvedTicketId);
+		}
+
+		logMetric("client_info_updated", 0.05, { task_id: activeTaskId, phone: resolvedPhone, email: resolvedEmail, timezone, external_id: resolvedExtId });
+		res.json({ 
+		  status: "ok", 
+		  task_id: activeTaskId,
+		  email: resolvedEmail,
+		  phone: resolvedPhone,
+		  external_id: resolvedExtId,
+		  client_name: resolvedName,
+		  zendesk_ticket_id: resolvedTicketId,
+		  zendesk_synced: zdSyncResult?.user_updated || zdSyncResult?.ticket_updated || false,
+		  zendesk_message: zdSyncResult?.details || "",
+		  zendesk_user_id: zdSyncResult?.user_id || null
+		});
 	  } catch (err: any) {
 		res.status(500).json({ error: err.message });
 	  }
@@ -5174,7 +7170,7 @@ We appreciate your understanding and preference.`;
 	  try {
 		const { data: manual, filename: sourceFilename } = await seleccionarManualPorContexto(query);
 		const clickupUrl = `https://api.clickup.com/api/v2/task/${task_id}`;
-		const response = await fetch(clickupUrl, { headers: { "Authorization": CLICKUP_API_KEY } });
+		const response = await fetch(clickupUrl, { headers: { "Authorization": getClickUpApiKey() } });
 
 		if (!response.ok) {
 		  return res.json({ answer: "Error: No pude descargar los datos de esta tarea desde ClickUp." });
@@ -5187,6 +7183,36 @@ We appreciate your understanding and preference.`;
 
 		const detailedCf = extractDetailedCustomFields(target.custom_fields || []);
 
+		const answeredTimesMap = await obtenerAnsweredTimes();
+		const respondedAt = answeredTimesMap[task_id] || null;
+
+		let metricasTiempoRespuesta = "";
+		let directrizDiasSinResponder = "";
+
+		if (respondedAt) {
+		  const responseDate = new Date(respondedAt);
+		  const diasHabiles = getBusinessDaysDiff(responseDate, new Date());
+		  const diasNaturales = Math.max(0, Math.floor((Date.now() - responseDate.getTime()) / (1000 * 60 * 60 * 24)));
+		  const fechaFormateada = responseDate.toISOString().replace("T", " ").substring(0, 19) + " UTC";
+		  
+		  metricasTiempoRespuesta = `• ÚLTIMA RESPUESTA CONFIRMADA DEL CLIENTE: ${fechaFormateada}
+• DÍAS HÁBILES SIN RESPONDER (EXCLUYENDO SÁBADOS Y DOMINGOS): ${diasHabiles} días hábiles.
+• DÍAS NATURALES TRANSCURRIDOS: ${diasNaturales} días naturales.`;
+
+		  directrizDiasSinResponder = `El cliente respondió formalmente por última vez el ${fechaFormateada}. Han transcurrido EXACTAMENTE ${diasHabiles} días hábiles (${diasNaturales} días naturales) desde su última respuesta confirmada.`;
+		} else {
+		  const createdDate = target.date_created ? new Date(parseInt(target.date_created)) : null;
+		  const diasHabilesCreacion = createdDate ? getBusinessDaysDiff(createdDate, new Date()) : null;
+		  const diasNaturalesCreacion = createdDate ? Math.max(0, Math.floor((Date.now() - createdDate.getTime()) / (1000 * 60 * 60 * 24))) : null;
+		  const fechaCreacionFmt = createdDate ? createdDate.toISOString().replace("T", " ").substring(0, 10) : detailedCf.contactDate;
+
+		  metricasTiempoRespuesta = `• REGISTRO DE RESPUESTA DEL CLIENTE: No hay registro de respuesta confirmada del cliente (solo intentos de llamada/buzón del agente o caso en espera).
+• FECHA DE CREACIÓN / CONTACTO INICIAL: ${fechaCreacionFmt}
+• TIEMPO TRANSCURRIDO SIN RESPUESTA DESDE EL INICIO: ${diasHabilesCreacion !== null ? `${diasHabilesCreacion} días hábiles (${diasNaturalesCreacion} días naturales)` : "Varios días"}.`;
+
+		  directrizDiasSinResponder = `No existe registro de que el cliente haya respondido alguna vez. Lleva ${diasHabilesCreacion !== null ? `${diasHabilesCreacion} días hábiles (${diasNaturalesCreacion} días naturales)` : "varios días"} sin responder desde que se creó el caso / primer contacto.`;
+		}
+
 		const manualFiltrado = filtrarManualRelevante(query, manual);
 
 		const promptFinal = `TAREA EN CLICKUP: ${target.name} (ID: ${task_id})
@@ -5194,6 +7220,9 @@ We appreciate your understanding and preference.`;
 	DESCRIPCIÓN ORIGINAL: ${descripcionTarea}
 
 	${detailedCf.summaryText}
+
+	⏱️ REGISTRO EXACTO DE TIEMPO Y DÍAS SIN RESPONDER:
+	${metricasTiempoRespuesta}
 
 	HILO DE COMENTARIOS DISPONIBLES: 
 	${hilo}
@@ -5210,8 +7239,16 @@ We appreciate your understanding and preference.`;
 	- 🛒 Fecha de Venta (ID f910021f-74df-426d-bdf2-586867dbf5c6): ${detailedCf.saleDate}
 	- 👤 Vendedor / Representante (ID af1663e3-9d94-4edd-ad6a-cd775d0a1a70): ${detailedCf.seller}
 	- 💵 Monto USD (ID a51386cd-755e-4c9c-af58-5686b5c2a82d): ${detailedCf.amountUsd}
+	- ⏳ TIEMPO SIN RESPUESTA: ${directrizDiasSinResponder}
 
 	Si el usuario te consulta sobre montos, vendedores, fecha de venta o fecha de contacto de esta tarea, proporciónale estos datos exactos.
+	
+	🎯 INSTRUCCIÓN CLAVE PARA PREGUNTAS DE "DÍAS SIN RESPONDER / CUÁNTO TIEMPO LLEVA SIN CONTESTAR":
+	Si te preguntan cuántos días tiene sin responder el cliente:
+	- Responde DIRECTAMENTE con el número exacto de días hábiles (${directrizDiasSinResponder}).
+	- Especifica si se cuenta desde su última respuesta confirmada o si nunca ha respondido desde la creación del ticket.
+	- Si tiene 4 o más días hábiles sin responder, recuérdale al agente que de acuerdo a las políticas operativas corresponde aplicar estatus DEADLINE (o proceder al cierre si ya se envió el aviso de deadline y expiró).
+
 	Lee todo el hilo de comentarios y responde su pregunta basándote ÚNICAMENTE en la información de este caso, sus campos personalizados y tu manual.
 	Sé clara, directa, amigable y muy profesional. Si te pide un resumen, cuéntale la historia del ticket de forma breve y fluida. 
 
@@ -5234,7 +7271,7 @@ We appreciate your understanding and preference.`;
 	app.get("/api/v2/list/223500803", async (req, res) => {
 	  try {
 		const url = "https://api.clickup.com/api/v2/list/223500803/task?include_closed=false";
-		const response = await fetch(url, { headers: { "Authorization": CLICKUP_API_KEY } });
+		const response = await fetch(url, { headers: { "Authorization": getClickUpApiKey() } });
 
 		if (!response.ok) {
 		  console.error("Error fetching list 223500803:", await response.text());
@@ -5267,7 +7304,7 @@ We appreciate your understanding and preference.`;
 	  const url = `https://api.clickup.com/api/v2/list/${listId}`;
 
 	  try {
-		const response = await fetch(url, { headers: { "Authorization": CLICKUP_API_KEY } });
+		const response = await fetch(url, { headers: { "Authorization": getClickUpApiKey() } });
 		if (!response.ok) {
 		  return res.status(400).json({ error: "No se pudo obtener la lista de ClickUp" });
 		}
@@ -5283,32 +7320,113 @@ We appreciate your understanding and preference.`;
 
 	// Duplicate to Refunds List
 	app.post("/api/duplicate-refund", async (req, res) => {
-	  const { task_id, method, type } = req.body;
+	  const { task_id, method, type, client, email, phone, address, amount, bank, swift, bank_account } = req.body;
 	  const targetMethod = method || "CHECK / WIRE TRANSFER";
 	  const targetType = type || "FULL/PARTIAL REFUND";
 
 	  try {
 		const url = `https://api.clickup.com/api/v2/task/${task_id}`;
-		const response = await fetch(url, { headers: { "Authorization": CLICKUP_API_KEY } });
+		const response = await fetch(url, { headers: { "Authorization": getClickUpApiKey() } });
 
 		if (!response.ok) {
 		  return res.status(400).json({ error: "No se pudo descargar la tarea original de ClickUp." });
 		}
 
-		const original = await response.ok ? await response.json() as any : null;
+		const original = (await response.json()) as any;
 		const originalName = original.name || "INVOICE";
 		const invoice = originalName.includes("-") ? originalName.split("-")[0].trim() : originalName;
 
 		const nuevoNombre = `${invoice} + ${targetMethod.toUpperCase()} + ${targetType.toUpperCase()}`;
 
-		let plantillaDatos = "";
-		if (targetMethod.toUpperCase().includes("WIRE") || targetMethod.toUpperCase().includes("TRANSFER")) {
-		  plantillaDatos = `\n\n======================================\n🏦 REQUIRED INFO FOR WIRE TRANSFER:\n======================================\nCustomer name: \nBank name: \nBank account number: \nBilling address: \nPhone: \nSWIFT code / ABA: \nAmount in USD: \nIntermediary bank info (if provided): \n`;
-		} else if (targetMethod.toUpperCase().includes("CHECK") || targetMethod.toUpperCase().includes("CHEQUE")) {
-		  plantillaDatos = `\n\n======================================\n✉️ REQUIRED INFO FOR CHECK:\n======================================\nFull name: \nHome address: \nBilling address: \n`;
+		// Extract / resolve fields for mandatory refund template
+		const phonesMap = await obtenerPhones();
+		let resolvedPhone = (phone || "").trim();
+		if (!resolvedPhone) {
+		  resolvedPhone = phonesMap[task_id] || "";
+		}
+		if (!resolvedPhone) {
+		  const phoneField = (original.custom_fields || []).find((f: any) =>
+			f.name && typeof f.name === "string" && (
+			  f.name.toLowerCase().includes("phone") ||
+			  f.name.toLowerCase().includes("teléfono") ||
+			  f.name.toLowerCase().includes("telefono")
+			)
+		  );
+		  if (phoneField && phoneField.value !== undefined) {
+			resolvedPhone = String(phoneField.value);
+		  }
 		}
 
-		const descripcionFinal = (original.description || "") + plantillaDatos;
+		let resolvedClient = (client || "").trim();
+		if (!resolvedClient) {
+		  if (originalName.includes("-")) {
+			resolvedClient = originalName.split("-").slice(1).join("-").trim();
+		  } else {
+			resolvedClient = originalName;
+		  }
+		}
+
+		let resolvedEmail = (email || "").trim();
+		if (!resolvedEmail) {
+		  const emailField = (original.custom_fields || []).find((f: any) =>
+			f.name && typeof f.name === "string" && (
+			  f.name.toLowerCase().includes("email") ||
+			  f.name.toLowerCase().includes("correo")
+			)
+		  );
+		  if (emailField && emailField.value !== undefined) {
+			resolvedEmail = String(emailField.value);
+		  } else {
+			const emailMatch = (original.description || "").match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+			if (emailMatch) resolvedEmail = emailMatch[0];
+		  }
+		}
+
+		let resolvedAmount = (amount || "").trim();
+		if (!resolvedAmount) {
+		  const amountField = (original.custom_fields || []).find((f: any) =>
+			f.id === ID_CF_AMOUNT_USD ||
+			(f.name && typeof f.name === "string" && (
+			  f.name.toLowerCase().includes("monto") ||
+			  f.name.toLowerCase().includes("amount")
+			))
+		  );
+		  if (amountField && amountField.value !== undefined && amountField.value !== null) {
+			const num = parseFloat(amountField.value);
+			resolvedAmount = !isNaN(num) ? `$${num.toFixed(2)} USD` : String(amountField.value);
+		  }
+		}
+
+		const resolvedAddress = (address || "").trim();
+		const origDesc = original.description || "";
+
+		let resolvedBank = (bank || "").trim();
+		if (!resolvedBank) {
+		  const bMatch = origDesc.match(/(?:Bank|Banco):\s*([^\n\r]+)/i);
+		  if (bMatch) resolvedBank = bMatch[1].trim();
+		}
+
+		let resolvedSwift = (swift || "").trim();
+		if (!resolvedSwift) {
+		  const sMatch = origDesc.match(/(?:Swift|SWIFT\s*code|ABA):\s*([^\n\r]+)/i);
+		  if (sMatch) resolvedSwift = sMatch[1].trim();
+		}
+
+		let resolvedBankAccount = (bank_account || "").trim();
+		if (!resolvedBankAccount) {
+		  const aMatch = origDesc.match(/(?:Bank\s*account|Account\s*number|Cuenta|Bank\s*account\s*number):\s*([^\n\r]+)/i);
+		  if (aMatch) resolvedBankAccount = aMatch[1].trim();
+		}
+
+		const isWire = targetMethod.toUpperCase().includes("WIRE") || targetMethod.toUpperCase().includes("TRANSFER");
+
+		let descripcionFinal = "";
+		if (isWire) {
+		  // Exact 8-line template for Wire Transfers with no other lines of text
+		  descripcionFinal = `Name: ${resolvedClient}\nEmail: ${resolvedEmail}\nPhone: ${resolvedPhone}\nCustomer Address: ${resolvedAddress}\nAmount: ${resolvedAmount}\nBank: ${resolvedBank}\nSwift : ${resolvedSwift}\nBank Account: ${resolvedBankAccount}`;
+		} else {
+		  descripcionFinal = `Name: ${resolvedClient}\nEmail: ${resolvedEmail}\nPhone: ${resolvedPhone}\nCustomer Address: ${resolvedAddress}\nAmount: ${resolvedAmount}\nMethod: ${targetMethod}\nStatus: Pending`;
+		}
 
 		const customFields: any[] = [];
 		for (const cf of (original.custom_fields || [])) {
@@ -5318,10 +7436,9 @@ We appreciate your understanding and preference.`;
 		}
 
 		// Post to list 223500803
-		const postUrl = "https://api.clickup.com/api/v2/list/223500803/task";
-		const createRes = await fetch(url_for_list_tasks(223500803), {
+		let createRes = await fetch("https://api.clickup.com/api/v2/list/223500803/task", {
 		  method: "POST",
-		  headers: { "Authorization": CLICKUP_API_KEY, "Content-Type": "application/json" },
+		  headers: { "Authorization": getClickUpApiKey(), "Content-Type": "application/json" },
 		  body: JSON.stringify({
 			name: nuevoNombre,
 			description: descripcionFinal,
@@ -5331,16 +7448,36 @@ We appreciate your understanding and preference.`;
 		});
 
 		if (!createRes.ok) {
-		  const errorText = await createRes.text();
-		  return res.status(400).json({ error: `ClickUp error cloning task: ${errorText}` });
+		  console.warn("⚠️ Falló creación con custom_fields en lista 223500803, reintentando creación limpia...");
+		  createRes = await fetch("https://api.clickup.com/api/v2/list/223500803/task", {
+			method: "POST",
+			headers: { "Authorization": getClickUpApiKey(), "Content-Type": "application/json" },
+			body: JSON.stringify({
+			  name: nuevoNombre,
+			  description: descripcionFinal,
+			  assignees: [ID_LORENZO]
+			})
+		  });
 		}
 
-		const nuevaTarea = await createRes.json() as any;
+		if (!createRes.ok) {
+		  const errorText = await createRes.text();
+		  console.error("❌ Error al duplicar en ClickUp:", errorText);
+		  return res.status(400).json({ error: `ClickUp error: ${errorText}` });
+		}
+
+		const nuevaTarea = (await createRes.json()) as any;
 		logMetric("task_cloned_to_refunds", 0.2, { original_id: task_id, new_id: nuevaTarea.id });
 
-		res.json({ status: "ok", new_task_url: nuevaTarea.url, new_name: nuevoNombre });
+		return res.json({ 
+		  status: "ok", 
+		  new_task_id: nuevaTarea.id,
+		  new_task_url: nuevaTarea.url || `https://app.clickup.com/t/${nuevaTarea.id}`, 
+		  new_name: nuevoNombre 
+		});
 
 	  } catch (error: any) {
+		console.error("❌ Error en /api/duplicate-refund:", error);
 		res.status(500).json({ error: error.message });
 	  }
 	});
@@ -6373,7 +8510,7 @@ We appreciate your understanding and preference.`;
 
 		while (true) {
 		  const url = `https://api.clickup.com/api/v2/list/${LIST_DISPUTES}/task?include_closed=true&date_updated_gt=${dateLimit}&page=${page}`;
-		  const response = await fetch(url, { headers: { "Authorization": CLICKUP_API_KEY } });
+		  const response = await fetchClickUp(url);
 		  if (!response.ok) {
 			return res.status(400).json({ error: "Error leyendo la lista de disputas de ClickUp." });
 		  }
@@ -6454,6 +8591,212 @@ We appreciate your understanding and preference.`;
 	  }
 	});
 
+	// Check invoices presence in ClickUp
+	let clickupTasksCache: {
+	  timestamp: number;
+	  disputesTasks: any[];
+	  csTasks: any[];
+	  refundsTasks: any[];
+	} | null = null;
+
+	async function getClickUpTasksForCheck(scope: string = "all"): Promise<Array<{ task: any; listName: string }>> {
+	  const now = Date.now();
+	  // Cache for 60 seconds
+	  const isCacheValid = clickupTasksCache && (now - clickupTasksCache.timestamp < 60000);
+
+	  const LIST_DISPUTES = "48493938";
+	  const LIST_CS = "48494459";
+	  const LIST_REFUNDS = "223500803";
+
+	  let disputesTasks = (isCacheValid && clickupTasksCache) ? clickupTasksCache.disputesTasks : [];
+	  let csTasks = (isCacheValid && clickupTasksCache) ? clickupTasksCache.csTasks : [];
+	  let refundsTasks = (isCacheValid && clickupTasksCache) ? clickupTasksCache.refundsTasks : [];
+
+	  const shouldFetchDisputes = (scope === "all" || scope === "disputes") && (!isCacheValid || disputesTasks.length === 0);
+	  const shouldFetchCS = (scope === "all" || scope === "cs") && (!isCacheValid || csTasks.length === 0);
+	  const shouldFetchRefunds = (scope === "all") && (!isCacheValid || refundsTasks.length === 0);
+
+	  const fetchListTasks = async (listId: string, maxPages: number = 8) => {
+	    const tasks: any[] = [];
+	    for (let page = 0; page < maxPages; page++) {
+	      try {
+	        const url = `https://api.clickup.com/api/v2/list/${listId}/task?include_closed=true&subtasks=true&page=${page}`;
+	        const res = await fetchClickUp(url);
+	        if (!res.ok) {
+	          console.warn(`[check-invoices] Warning fetching page ${page} of list ${listId}: ${res.status}`);
+	          break;
+	        }
+	        const data = await res.json() as any;
+	        const pageTasks = data.tasks || [];
+	        if (pageTasks.length === 0) break;
+	        tasks.push(...pageTasks);
+	      } catch (e) {
+	        console.error(`[check-invoices] Error on page ${page} list ${listId}:`, e);
+	        break;
+	      }
+	    }
+	    return tasks;
+	  };
+
+	  const promises: Promise<void>[] = [];
+	  if (shouldFetchDisputes) {
+	    promises.push((async () => {
+	      disputesTasks = await fetchListTasks(LIST_DISPUTES, 8);
+	    })());
+	  }
+	  if (shouldFetchCS) {
+	    promises.push((async () => {
+	      csTasks = await fetchListTasks(LIST_CS, 8);
+	    })());
+	  }
+	  if (shouldFetchRefunds) {
+	    promises.push((async () => {
+	      refundsTasks = await fetchListTasks(LIST_REFUNDS, 4);
+	    })());
+	  }
+
+	  if (promises.length > 0) {
+	    await Promise.all(promises);
+	  }
+
+	  // Update cache
+	  clickupTasksCache = {
+	    timestamp: now,
+	    disputesTasks: disputesTasks.length > 0 ? disputesTasks : (clickupTasksCache?.disputesTasks || []),
+	    csTasks: csTasks.length > 0 ? csTasks : (clickupTasksCache?.csTasks || []),
+	    refundsTasks: refundsTasks.length > 0 ? refundsTasks : (clickupTasksCache?.refundsTasks || []),
+	  };
+
+	  const combined: Array<{ task: any; listName: string }> = [];
+	  if (scope === "disputes" || scope === "all") {
+	    for (const t of (clickupTasksCache?.disputesTasks || [])) {
+	      combined.push({ task: t, listName: "Disputas" });
+	    }
+	  }
+	  if (scope === "cs" || scope === "all") {
+	    for (const t of (clickupTasksCache?.csTasks || [])) {
+	      combined.push({ task: t, listName: "Casos CS" });
+	    }
+	  }
+	  if (scope === "all") {
+	    for (const t of (clickupTasksCache?.refundsTasks || [])) {
+	      combined.push({ task: t, listName: "Reembolsos" });
+	    }
+	  }
+
+	  return combined;
+	}
+
+	app.post("/api/check-invoices-clickup", async (req, res) => {
+	  try {
+	    const { invoices, scope = "all", forceRefresh = false } = req.body || {};
+	    if (!Array.isArray(invoices) || invoices.length === 0) {
+	      return res.status(400).json({ error: "Debes enviar un listado de facturas (invoices)." });
+	    }
+
+	    if (forceRefresh) {
+	      clickupTasksCache = null;
+	    }
+
+	    const rawInvoices = invoices.map(inv => String(inv || "").trim()).filter(Boolean);
+	    const uniqueInvoices = Array.from(new Set(rawInvoices));
+
+	    const allTasksWithList = await getClickUpTasksForCheck(scope);
+
+	    const ID_CF_REASON = "ee1a1e07-a9b6-4209-a7bc-87162005e2f2";
+
+	    const details: any[] = [];
+	    const foundInvoices: string[] = [];
+	    const notFoundInvoices: string[] = [];
+
+	    for (const invoice of uniqueInvoices) {
+	      const cleanInvoice = invoice.replace(/^#/, "").trim();
+	      const upperInvoice = invoice.toUpperCase();
+	      const upperClean = cleanInvoice.toUpperCase();
+
+	      // Search among tasks
+	      const match = allTasksWithList.find(({ task }) => {
+	        const taskNameUpper = String(task.name || "").toUpperCase();
+	        if (taskNameUpper.includes(upperInvoice) || taskNameUpper.includes(upperClean)) {
+	          return true;
+	        }
+	        // Check custom fields
+	        for (const cf of (task.custom_fields || [])) {
+	          if (cf.value !== undefined && cf.value !== null) {
+	            const valStr = String(cf.value).toUpperCase();
+	            if (valStr.includes(upperClean) || valStr.includes(upperInvoice)) return true;
+	          }
+	        }
+	        return false;
+	      });
+
+	      if (match) {
+	        const { task, listName } = match;
+	        foundInvoices.push(invoice);
+
+	        // Extract reason if available
+	        let reasonText: string | null = null;
+	        for (const cf of (task.custom_fields || [])) {
+	          if (cf.id === ID_CF_REASON && cf.value !== undefined && cf.value !== null) {
+	            const opciones = cf.type_config?.options || [];
+	            const val = cf.value;
+	            if (typeof val === "number" && val < opciones.length) {
+	              reasonText = opciones[val].name;
+	            } else if (typeof val === "string") {
+	              const optMatch = opciones.find((opt: any) => opt.id === val);
+	              if (optMatch) reasonText = optMatch.name;
+	            }
+	          }
+	        }
+
+	        const assignees = (task.assignees || []).map((a: any) => a.username || a.name || a.email || "Usuario");
+	        const dueDate = task.due_date ? new Date(parseInt(task.due_date)).toLocaleDateString("es-MX") : null;
+	        const dateUpdated = task.date_updated ? new Date(parseInt(task.date_updated)).toLocaleDateString("es-MX") : null;
+
+	        details.push({
+	          invoice,
+	          exists: true,
+	          task: {
+	            id: task.id,
+	            name: task.name,
+	            url: task.url || `https://app.clickup.com/t/${task.id}`,
+	            status: task.status?.status || "unknown",
+	            statusColor: task.status?.color || "#64748b",
+	            listName,
+	            listId: task.list?.id,
+	            assignees,
+	            dueDate,
+	            dateUpdated,
+	            reason: reasonText
+	          }
+	        });
+	      } else {
+	        notFoundInvoices.push(invoice);
+	        details.push({
+	          invoice,
+	          exists: false,
+	          task: null
+	        });
+	      }
+	    }
+
+	    return res.json({
+	      totalInput: uniqueInvoices.length,
+	      foundCount: foundInvoices.length,
+	      notFoundCount: notFoundInvoices.length,
+	      foundInvoices,
+	      notFoundInvoices,
+	      details,
+	      scopeUsed: scope,
+	      totalTasksChecked: allTasksWithList.length
+	    });
+
+	  } catch (error: any) {
+	    console.error("Error in /api/check-invoices-clickup:", error);
+	    return res.status(500).json({ error: error.message || "Error al verificar facturas en ClickUp." });
+	  }
+	});
+
 	// Catch-all 404 for unmatched API routes to prevent HTML SPA fallback
 	app.all("/api/*", (req, res) => {
 	  res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl}` });
@@ -6461,26 +8804,35 @@ We appreciate your understanding and preference.`;
 
 	// Vite Middleware for development / Static Server for production
 	async function startServer() {
-	  // Initialize synchronization from Supabase to local filesystem
-	  await syncSupabaseToLocal();
+	  try {
+		if (process.env.NODE_ENV !== "production") {
+		  const vite = await createViteServer({
+			server: { middlewareMode: true },
+			appType: "spa",
+		  });
+		  app.use(vite.middlewares);
+		} else {
+		  const distPath = path.join(process.cwd(), "dist");
+		  app.use(express.static(distPath));
+		  app.get("*", (req, res) => {
+			res.sendFile(path.join(distPath, "index.html"));
+		  });
+		}
 
-	  if (process.env.NODE_ENV !== "production") {
-		const vite = await createViteServer({
-		  server: { middlewareMode: true },
-		  appType: "spa",
+		const server = app.listen(PORT, "0.0.0.0", () => {
+		  console.log(`🚀 Morena OS Server running on http://localhost:${PORT}`);
+		  // Non-blocking background sync from Supabase to local filesystem
+		  syncSupabaseToLocal().catch((err) => {
+			console.error("[Supabase Background Sync Error]:", err?.message || err);
+		  });
 		});
-		app.use(vite.middlewares);
-	  } else {
-		const distPath = path.join(process.cwd(), "dist");
-		app.use(express.static(distPath));
-		app.get("*", (req, res) => {
-		  res.sendFile(path.join(distPath, "index.html"));
+
+		server.on("error", (err: any) => {
+		  console.error("Server listen error:", err);
 		});
+	  } catch (err: any) {
+		console.error("Critical error during startServer:", err);
 	  }
-
-	  app.listen(PORT, "0.0.0.0", () => {
-		console.log(`🚀 Morena OS Server running on http://localhost:${PORT}`);
-	  });
 	}
 
 	// Global Helper Mappings used inside Express endpoints

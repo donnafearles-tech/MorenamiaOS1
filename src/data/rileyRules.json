@@ -22,6 +22,23 @@
   },
   "rules": [
     {
+      "id": "PRODUCT_AND_REFUND_MUST_BE_P_AND_R",
+      "title": "Resolución Producto + Reembolso Debe Ser P+R",
+      "description": "Cuando en el comentario se agregue que se va a entregar o enviar un producto y aparte un reembolso, la resolución oficial DEBE ser estrictamente P+R.",
+      "if": {
+        "or": [
+          { "commentsContainExplicit": ["p+r", "product + refund", "producto + reembolso", "producto y aparte un reembolso", "un producto y un reembolso"] },
+          { "and": [
+            { "commentsContainProduct": true },
+            { "commentsContainRefund": true },
+            { "commentsContainAdditiveConnector": true }
+          ] }
+        ],
+        "resolutionNotEquals": "P+R"
+      },
+      "then": { "status": "CHECK", "suggestedResolution": "P+R" }
+    },
+    {
       "id": "DISPUTE_PREMATURE",
       "title": "Posible Disputa Prematura",
       "description": "La resolución se estableció como DISPUTE pero los comentarios no incluyen evidencia clara de disputa bancaria/chargeback o el cliente aún está en conversación.",
@@ -53,15 +70,28 @@
     },
     {
       "id": "NO_CUSTOMER_AGREEMENT_FOR_GIFT_REFUND_RESOLVED",
-      "title": "Falta Aceptación del Cliente",
-      "description": "Se eligió GIFT, REFUND o RESOLVED sin frases explícitas de aceptación o satisfacción del cliente en la conversación.",
+      "title": "Falta Aceptación o Interacción del Cliente",
+      "description": "Se eligió GIFT, REFUND o RESOLVED sin frases explícitas de aceptación, llamada, compra o interacción del cliente en los registros.",
       "if": {
         "resolutionIn": ["GIFT", "REFUND", "RESOLVED"],
         "and": [
-          { "noCustomerAcceptancePhrase": true }
+          { "noCustomerAcceptancePhrase": true },
+          { "noCustomerInboundOrPurchaseContact": true }
         ]
       },
       "then": { "status": "CHECK" }
+    },
+    {
+      "id": "ACTIVE_CUSTOMER_NOT_LOST_LEAD",
+      "title": "Cliente Activo ≠ Lost Lead",
+      "description": "El cliente se comunicó activamente (llamada entrante, respuesta o interés de compra). No debe clasificarse como Lost Lead.",
+      "if": {
+        "resolutionEquals": "LOST LEAD",
+        "and": [
+          { "customerInboundCallOrReplyDetected": true }
+        ]
+      },
+      "then": { "status": "CHECK", "suggestedResolution": "RESOLVED" }
     },
     {
       "id": "LOST_LEAD_TOO_EARLY",
